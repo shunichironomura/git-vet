@@ -32,7 +32,7 @@ impl fmt::Display for RepoPath {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum PathError {
+pub enum PathError {
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(String),
     #[error("path escapes the repository root: {0}")]
@@ -41,7 +41,7 @@ pub(crate) enum PathError {
     EmptyPath,
 }
 
-pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
+pub fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
     let root = normalize_lexically(root);
     let cwd = normalize_lexically(cwd);
     cwd.strip_prefix(&root)
@@ -49,14 +49,14 @@ pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathEr
         .map_err(|_| PathError::PathOutsideRepo(cwd.display().to_string()))
 }
 
-pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
+pub fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
     let path = path
         .to_str()
         .map_err(|err| PathError::NonUtf8Path(err.to_string()))?;
     RepoPath::from_git_path(path)
 }
 
-pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
+pub fn normalize_lexically(path: &Path) -> PathBuf {
     path.components()
         .fold(PathBuf::new(), |mut normalized, component| {
             match component {
@@ -72,7 +72,7 @@ pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
         })
 }
 
-pub(crate) fn repo_path_from_relative(path: &Path) -> Result<String, PathError> {
+pub fn repo_path_from_relative(path: &Path) -> Result<String, PathError> {
     let parts = path
         .components()
         .map(|component| match component {
@@ -88,9 +88,10 @@ pub(crate) fn repo_path_from_relative(path: &Path) -> Result<String, PathError> 
         .filter(|part| !matches!(part, Ok(value) if value.is_empty()))
         .collect::<Result<Vec<_>, _>>()?;
 
-    match parts.is_empty() {
-        true => Err(PathError::EmptyPath),
-        false => Ok(parts.join("/")),
+    if parts.is_empty() {
+        Err(PathError::EmptyPath)
+    } else {
+        Ok(parts.join("/"))
     }
 }
 

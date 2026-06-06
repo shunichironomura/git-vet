@@ -9,11 +9,11 @@ use crate::path::RepoPath;
 pub struct BlobOid(gix::ObjectId);
 
 impl BlobOid {
-    pub(crate) fn new(oid: gix::ObjectId) -> Self {
+    pub(crate) const fn new(oid: gix::ObjectId) -> Self {
         Self(oid)
     }
 
-    pub(crate) fn as_object_id(&self) -> gix::ObjectId {
+    pub(crate) const fn as_object_id(&self) -> gix::ObjectId {
         self.0
     }
 
@@ -38,10 +38,10 @@ impl fmt::Display for BlobOid {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub(crate) struct CommitOid(gix::ObjectId);
+pub struct CommitOid(gix::ObjectId);
 
 impl CommitOid {
-    pub(crate) fn new(oid: gix::ObjectId) -> Self {
+    pub(crate) const fn new(oid: gix::ObjectId) -> Self {
         Self(oid)
     }
 }
@@ -53,39 +53,39 @@ impl fmt::Display for CommitOid {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FileMode(EntryMode);
+pub struct FileMode(EntryMode);
 
 impl FileMode {
-    pub(crate) fn new(mode: EntryMode) -> Self {
+    pub(crate) const fn new(mode: EntryMode) -> Self {
         Self(mode)
     }
 
-    pub(crate) fn kind(&self) -> EntryKind {
+    pub(crate) const fn kind(self) -> EntryKind {
         self.0.kind()
     }
 
-    pub(crate) fn is_reviewable_file(&self) -> bool {
+    pub(crate) const fn is_reviewable_file(self) -> bool {
         self.0.is_blob_or_symlink()
     }
 
-    pub(crate) fn is_submodule(&self) -> bool {
+    pub(crate) const fn is_submodule(self) -> bool {
         self.0.is_commit()
     }
 
-    pub(crate) fn as_octal(&self) -> String {
+    pub(crate) fn as_octal(self) -> String {
         format!("{:o}", self.0)
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TrackedFile {
+pub struct TrackedFile {
     pub(crate) path: RepoPath,
     pub(crate) blob: BlobOid,
     pub(crate) mode: FileMode,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct HistoricalBlob {
+pub struct HistoricalBlob {
     pub(crate) blob: BlobOid,
     pub(crate) mode: FileMode,
 }

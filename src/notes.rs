@@ -1,3 +1,5 @@
+use std::io::{self, Write};
+
 use gix::bstr::ByteSlice;
 use gix::objs::tree::EntryKind;
 
@@ -10,7 +12,7 @@ use crate::review::{ReviewInfo, ReviewedSet, parse_note_records};
 const NOTES_MERGE_STRATEGY_KEY: &str = "notes.mergeStrategy";
 const NOTES_MERGE_STRATEGY: &str = "cat_sort_uniq";
 
-pub(crate) trait NotesStore {
+pub trait NotesStore {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError>;
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError>;
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError>;
@@ -25,25 +27,23 @@ struct NoteEntry {
 }
 
 #[derive(Clone)]
-pub(crate) struct GixNotesStore<'git> {
+pub struct GixNotesStore<'git> {
     git: &'git Git,
     notes_ref: NotesRef,
 }
 
 impl<'git> GixNotesStore<'git> {
-    pub(crate) fn new(git: &'git Git, notes_ref: NotesRef) -> Self {
+    pub(crate) const fn new(git: &'git Git, notes_ref: NotesRef) -> Self {
         Self { git, notes_ref }
     }
 
     fn configure_merge_strategy(&self) -> Result<(), AppError> {
         let config_path = self.git.repo.common_dir().join("config");
-        let mut config = match config_path.exists() {
-            true => gix_config::File::from_path_no_includes(
-                config_path.clone(),
-                gix_config::Source::Local,
-            )
-            .map_err(|err| git_error("reading repository config", err))?,
-            false => gix_config::File::default(),
+        let mut config = if config_path.exists() {
+            gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
+                .map_err(|err| git_error("reading repository config", err))?
+        } else {
+            gix_config::File::default()
         };
         config
             .set_raw_value(NOTES_MERGE_STRATEGY_KEY, NOTES_MERGE_STRATEGY)
@@ -62,13 +62,13 @@ impl<'git> GixNotesStore<'git> {
             .map_err(|err| git_error("walking notes tree", err))?
             .into_iter()
             .filter(|entry| entry.mode.is_blob())
-            .filter_map(|entry| self.note_entry_from_tree_record(entry).transpose())
+            .filter_map(|entry| self.note_entry_from_tree_record(&entry).transpose())
             .collect()
     }
 
     fn note_entry_from_tree_record(
         &self,
-        entry: gix::traverse::tree::recorder::Entry,
+        entry: &gix::traverse::tree::recorder::Entry,
     ) -> Result<Option<NoteEntry>, AppError> {
         let note_path = entry
             .filepath
@@ -107,13 +107,15 @@ impl<'git> GixNotesStore<'git> {
             .repo
             .try_find_reference(self.notes_ref.as_str())
             .map_err(|err| git_error("finding notes ref", err))?;
-        match reference {
-            Some(mut reference) => reference
-                .peel_to_tree()
-                .map(Some)
-                .map_err(|err| git_error("reading notes tree", err)),
-            None => Ok(None),
-        }
+        reference.map_or_else(
+            || Ok(None),
+            |mut reference| {
+                reference
+                    .peel_to_tree()
+                    .map(Some)
+                    .map_err(|err| git_error("reading notes tree", err))
+            },
+        )
     }
 
     fn notes_tree_id(&self) -> Result<Option<gix::ObjectId>, AppError> {
@@ -252,7 +254,7 @@ impl NotesStore for GixNotesStore<'_> {
                 editor
                     .remove(path)
                     .map_err(|err| git_error("removing stale note", err))?;
-                println!("Removing note for object {path}");
+                writeln!(io::stdout().lock(), "Removing note for object {path}")?;
                 Ok(())
             })
         })

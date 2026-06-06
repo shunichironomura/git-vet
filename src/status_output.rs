@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use serde::Serialize;
 
 use crate::channel::ReviewChannel;
@@ -22,10 +24,10 @@ struct JsonStatusRecord<'a> {
     reviewer: Option<&'a str>,
 }
 
-pub(crate) fn print_json_status(
+pub fn json_status(
     channel: &ReviewChannel,
     classified: &[ClassifiedFile],
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     let files = classified
         .iter()
         .map(|file| JsonStatusRecord {
@@ -43,35 +45,42 @@ pub(crate) fn print_json_status(
                 .map(|metadata| metadata.reviewer.as_str()),
         })
         .collect::<Vec<_>>();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&JsonStatus { channel, files })?
-    );
-    Ok(())
+    serde_json::to_string_pretty(&JsonStatus { channel, files })
+        .map(|json| format!("{json}\n"))
+        .map_err(AppError::from)
 }
 
-pub(crate) fn print_human_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) {
-    println!("channel: {channel}");
-    print_group("vetted", classified, |state| {
+pub fn human_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) -> String {
+    let mut output = format!("channel: {channel}\n");
+    push_group(&mut output, "vetted", classified, |state| {
         matches!(state, ReviewState::Vetted)
     });
-    print_group("stale", classified, |state| {
+    push_group(&mut output, "stale", classified, |state| {
         matches!(state, ReviewState::Stale { .. })
     });
-    print_group("new", classified, |state| matches!(state, ReviewState::New));
+    push_group(&mut output, "new", classified, |state| {
+        matches!(state, ReviewState::New)
+    });
+    output
 }
 
-fn print_group(label: &str, classified: &[ClassifiedFile], include: impl Fn(&ReviewState) -> bool) {
-    println!("{label}:");
+fn push_group(
+    output: &mut String,
+    label: &str,
+    classified: &[ClassifiedFile],
+    include: impl Fn(&ReviewState) -> bool,
+) {
+    let _ = writeln!(output, "{label}:");
     let files = classified
         .iter()
         .filter(|file| include(&file.state))
         .collect::<Vec<_>>();
-    match files.is_empty() {
-        true => println!("  (none)"),
-        false => files
-            .iter()
-            .for_each(|file| println!("  {}", human_status_line(file))),
+    if files.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for file in files {
+            let _ = writeln!(output, "  {}", human_status_line(file));
+        }
     }
 }
 

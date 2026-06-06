@@ -4,7 +4,7 @@ use crate::git_types::{BlobOid, CommitOid, FileMode};
 use crate::path::RepoPath;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewRecord {
+pub struct ReviewRecord {
     pub(crate) reviewed_at: String,
     pub(crate) reviewer: String,
     pub(crate) commit: CommitOid,
@@ -21,7 +21,7 @@ impl ReviewRecord {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ReviewInfo {
+pub struct ReviewInfo {
     pub(crate) records: Vec<ReviewRecord>,
 }
 
@@ -38,13 +38,13 @@ impl ReviewInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewMetadata {
+pub struct ReviewMetadata {
     pub(crate) last_reviewed_at: String,
     pub(crate) reviewer: String,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ReviewedSet {
+pub struct ReviewedSet {
     pub(crate) by_blob: HashMap<BlobOid, ReviewInfo>,
 }
 
@@ -59,7 +59,7 @@ impl ReviewedSet {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum ReviewState {
+pub enum ReviewState {
     Vetted,
     Stale {
         baseline: BlobOid,
@@ -69,7 +69,7 @@ pub(crate) enum ReviewState {
 }
 
 impl ReviewState {
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub(crate) const fn as_str(&self) -> &'static str {
         match self {
             Self::Vetted => "vetted",
             Self::Stale { .. } => "stale",
@@ -77,7 +77,7 @@ impl ReviewState {
         }
     }
 
-    pub(crate) fn baseline(&self) -> Option<&BlobOid> {
+    pub(crate) const fn baseline(&self) -> Option<&BlobOid> {
         match self {
             Self::Stale { baseline, .. } => Some(baseline),
             Self::Vetted | Self::New => None,
@@ -86,14 +86,14 @@ impl ReviewState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ClassifiedFile {
+pub struct ClassifiedFile {
     pub(crate) path: RepoPath,
     pub(crate) state: ReviewState,
     pub(crate) blob: BlobOid,
     pub(crate) metadata: Option<ReviewMetadata>,
 }
 
-pub(crate) fn append_record(existing: Option<&str>, new_record: &ReviewRecord) -> String {
+pub fn append_record(existing: Option<&str>, new_record: &ReviewRecord) -> String {
     let already_recorded = existing
         .map(parse_note_records)
         .unwrap_or_default()
@@ -115,13 +115,14 @@ pub(crate) fn append_record(existing: Option<&str>, new_record: &ReviewRecord) -
     lines.sort();
     lines.dedup();
 
-    match lines.is_empty() {
-        true => String::new(),
-        false => format!("{}\n", lines.join("\n")),
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
     }
 }
 
-pub(crate) fn parse_note_records(body: &str) -> Vec<ReviewRecord> {
+pub fn parse_note_records(body: &str) -> Vec<ReviewRecord> {
     body.lines().filter_map(parse_note_record).collect()
 }
 
@@ -143,20 +144,21 @@ fn parse_note_record(line: &str) -> Option<ReviewRecord> {
 mod tests {
     use super::*;
 
-    fn oid(hex: &str) -> gix::ObjectId {
-        gix::ObjectId::from_hex(hex.as_bytes()).unwrap()
+    fn oid(hex: &str) -> Result<gix::ObjectId, Box<dyn std::error::Error>> {
+        gix::ObjectId::from_hex(hex.as_bytes()).map_err(Into::into)
     }
 
     #[test]
-    fn append_record_sorts_and_deduplicates_records() {
+    fn append_record_sorts_and_deduplicates_records() -> Result<(), Box<dyn std::error::Error>> {
         let record = ReviewRecord {
             reviewed_at: "2026-06-06T00:00:00Z".to_owned(),
             reviewer: "reviewer@example.com".to_owned(),
-            commit: CommitOid::new(oid("0123456789012345678901234567890123456789")),
-            path: RepoPath::from_git_path("src/main.rs").unwrap(),
+            commit: CommitOid::new(oid("0123456789012345678901234567890123456789")?),
+            path: RepoPath::from_git_path("src/main.rs")?,
         };
         let existing = "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit=0123456789012345678901234567890123456789 path=src/main.rs\n";
 
         assert_eq!(append_record(Some(existing), &record), existing);
+        Ok(())
     }
 }
