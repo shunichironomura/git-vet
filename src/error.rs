@@ -26,6 +26,8 @@ pub enum AppError {
     PathIsSubmodule(RepoPath),
     #[error("failed to read .vetignore: {0}")]
     Vetignore(String),
+    #[error("missing git config user.name")]
+    MissingUserName,
     #[error("missing git config user.email")]
     MissingUserEmail,
     #[error("invalid review channel {channel:?}: {details}")]
