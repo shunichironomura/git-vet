@@ -47,8 +47,7 @@ impl Git {
         let relative = normalized
             .strip_prefix(&root)
             .map_err(|_| AppError::PathOutsideRepo(input.display().to_string()))?;
-        let path = repo_path_from_relative(relative)?;
-        RepoPath::from_git_path(&path).map_err(AppError::from)
+        repo_path_from_relative(relative).map_err(AppError::from)
     }
 
     pub(crate) fn tracked_files_at_head(&self) -> Result<Vec<TrackedFile>, AppError> {

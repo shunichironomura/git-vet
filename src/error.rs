@@ -21,6 +21,8 @@ pub enum AppError {
     PathOutsideRepo(String),
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
+    #[error("repo path is invalid: {path}: {details}")]
+    InvalidRepoPath { path: String, details: &'static str },
     #[error("path is not tracked at HEAD: {0}")]
     PathNotTracked(RepoPath),
     #[error("path is a submodule/gitlink and is out of scope: {0}")]
@@ -55,6 +57,7 @@ impl From<PathError> for AppError {
             PathError::NonUtf8Path(path) => Self::NonUtf8Path(path),
             PathError::PathOutsideRepo(path) => Self::PathOutsideRepo(path),
             PathError::EmptyPath => Self::EmptyPath,
+            PathError::InvalidRepoPath { path, details } => Self::InvalidRepoPath { path, details },
         }
     }
 }
