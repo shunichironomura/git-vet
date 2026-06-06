@@ -18,6 +18,7 @@ The unit of review is **file content**: reviewing a file means signing off on it
 ## 2. Goals and non-goals
 
 ### Goals
+
 - Record, in Git, which files' current content has been human-reviewed.
 - Make "not reviewed" the default for any new or modified content, with zero manual bookkeeping to invalidate stale sign-offs.
 - Support reviewing only the **diff since the last sign-off**, not the whole file, when a prior reviewed version exists.
@@ -25,6 +26,7 @@ The unit of review is **file content**: reviewing a file means signing off on it
 - Work offline, locally, and sync across machines/teammates through a notes ref.
 
 ### Non-goals (explicitly out of scope for v1)
+
 - **No authorship tracking.** The tool does not know or care whether content was written by a human or an AI. There is no git-ai dependency and no AI/human distinction in the model.
 - **No PR gating.** It does not block merges or integrate with the PR pipeline. It is a parallel process.
 - **No per-line review state.** Review is per file (per blob), not per line or per hunk.
@@ -72,9 +74,11 @@ The release gate treats both `stale` and `new` as "not reviewed."
 ## 5. Data model and storage
 
 ### 5.1 Notes ref
+
 All state lives in `refs/notes/vet`. Each note is attached to a **blob** object (not a commit), keyed by the blob OID. The presence of the note is the signal; the body is provenance only.
 
 ### 5.2 Note body
+
 The body is an append-only set of review records, one per line, so the same content reviewed more than once (or by more than one person) accumulates an audit trail:
 
 ```
@@ -89,19 +93,25 @@ reviewed-at=2026-06-06T12:30:00+09:00 reviewer=user@example.com commit=<sha-at-r
 Records are sorted/deduplicated by the notes merge strategy (§5.4), so re-marking identical content is idempotent.
 
 ### 5.3 Sync
+
 Notes refs are **not** pushed or fetched by default. The tool must make this easy:
+
 - Push: `git push <remote> refs/notes/vet`
 - Fetch refspec: `+refs/notes/vet:refs/notes/vet`
 - `git vet sync` wraps fetch + merge + push of this ref.
 
 ### 5.4 Merge strategy
+
 Concurrent sign-offs (different machines, different blobs) must not clobber each other. Configure a line-unioning strategy for the ref:
+
 ```
 git config notes.mergeStrategy cat_sort_uniq
 ```
+
 With per-blob, line-record bodies this makes merges conflict-free for the common case (different blobs → different note objects; same blob → records union/dedup).
 
 ### 5.5 Pruning
+
 Notes for blobs that no longer exist anywhere in the repo accumulate slowly. `git notes --ref=vet prune` removes them. Expose as `git vet prune`. (Trade-off: prune drops sign-off for content not currently present — acceptable, since absent content has nothing to gate.)
 
 ---
@@ -122,11 +132,13 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | `git vet prune` | Remove notes for blobs no longer present (`git notes --ref=vet prune`). |
 
 ### 6.1 `status` output modes
+
 - Default: human-readable grouping by derived state.
 - `--json`: array of objects `{ "path": str, "state": "vetted"|"stale"|"new", "blob": oid, "baseline": oid|null, "last_reviewed_at": str|null, "reviewer": str|null }`.
 - `--check`: release-gate mode. Print the unreviewed files; **exit non-zero** if any in-scope file is `stale` or `new`.
 
 ### 6.2 Exit codes
+
 - `0` — success; for `--check`, all in-scope files are `vetted`.
 - `1` — for `--check`, one or more in-scope files are not reviewed.
 - `2` — usage / runtime error (not a Git repo, bad path, etc.).
@@ -136,6 +148,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 ## 7. Key algorithms
 
 ### 7.1 Classify a path
+
 ```
 cur := blob_oid(HEAD, path)            # git rev-parse HEAD:<path>
 if cur ∈ reviewed_set: return Vetted
@@ -143,19 +156,23 @@ for b in historical_blobs(path):       # git log --follow -- <path>, newest→ol
     if b ∈ reviewed_set: return Stale(baseline = b)
 return New
 ```
+
 - `reviewed_set` is loaded **once** per invocation: list every note in `refs/notes/vet`, collect the annotated blob OIDs into a `HashSet<Oid>`. Membership tests are O(1).
 - The history walk runs only when `cur` is not vetted, and is bounded to the single path via `--follow` (which also tracks the baseline across renames).
 
 ### 7.2 Diff to review
+
 ```
 classify(path):
   Vetted        -> report "up to date", no diff
   New           -> full review: diff empty-tree → cur (the whole file)
   Stale(base)   -> diff base → cur for this path (cumulative change since last sign-off)
 ```
+
 Binary files: defer to Git's binary-diff behavior; "full review" of a binary means inspecting it out of band.
 
 ### 7.3 Release gate (`status --check`)
+
 ```
 reviewed_set := load once
 fail := false
@@ -165,6 +182,7 @@ for path in in_scope(git ls-files):    # minus ignored paths (§9.4)
         fail := true
 exit(1 if fail else 0)
 ```
+
 The gate never walks history: an unreviewed file fails regardless of whether it is `new` or `stale`, so only the cheap membership test is needed. (The `new`/`stale` distinction is computed only for `status` display and `diff`/`review`.)
 
 ---
@@ -172,6 +190,7 @@ The gate never walks history: an unreviewed file fails regardless of whether it 
 ## 8. Workflow
 
 ### 8.1 Steady state
+
 1. Code lands on `main` through the normal, lightweight PR pipeline — no `git-vet` involvement, nothing blocked.
 2. In parallel, on your own schedule, you review files. `git vet status` shows the backlog (`new` + `stale`).
 3. For a file, `git vet diff <path>` (or `git vet review <path>`) shows what to read — the whole file if `new`, just the change since your last sign-off if `stale`.
@@ -181,9 +200,11 @@ The gate never walks history: an unreviewed file fails regardless of whether it 
 7. At release, `git vet status --check` gates on the whole tree being reviewed.
 
 ### 8.2 Onboarding a non-new (legacy) repository
+
 No special handling. On install, the reviewed set is empty, so **every tracked file reads as `new`** — the entire existing tree is the initial review backlog, which is exactly the desired starting point. Work it down incrementally with `review`/`mark`; gate with `--check` once the backlog (minus ignored paths) is empty. There is no seeding step, no baseline marker, and no authorship inference — this simplicity is the direct payoff of dropping authorship from the model.
 
 ### 8.3 Multi-machine / team
+
 State is shared by pushing/fetching `refs/notes/vet` (§5.3) with `cat_sort_uniq` merge (§5.4). Sign-offs are per-content, so two people reviewing different files never conflict; two people reviewing identical content simply produce two provenance records on the same blob.
 
 ---
@@ -199,6 +220,7 @@ State is shared by pushing/fetching `refs/notes/vet` (§5.3) with `cat_sort_uniq
 7. **Submodules.** Out of scope in v1; skip gitlink entries.
 
 ### 9.4 Ignore list
+
 `status`/`--check` consult a repo-root `.vetignore` using gitignore syntax, so generated, vendored, and lockfile paths can be excluded and "everything reviewed" is attainable. This is a plain denylist for the gate only — not scope-seeding state, and it stores nothing in notes.
 
 ---
@@ -216,7 +238,7 @@ State is shared by pushing/fetching `refs/notes/vet` (§5.3) with `cat_sort_uniq
 
 ## 11. Implementation notes
 
-- Language: Rust. CLI: `clap` (derive). 
+- Language: Rust. CLI: `clap` (derive).
 - Git access: `gix` for repository discovery, blob resolution, ref enumeration, and history walking. **Notes read/write may be shelled out to `git notes --ref=vet …`** if `gix` notes support is insufficient; isolate this behind a small `NotesStore` trait so the backend can be swapped.
 - Load the reviewed set once per command into a `HashSet<gix::ObjectId>`.
 - Keep the history walk (`--follow`) confined to `diff`/`review`/`status`-display; never run it in the gate path.
