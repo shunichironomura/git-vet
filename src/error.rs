@@ -30,6 +30,8 @@ pub enum AppError {
     MissingUserName,
     #[error("missing git config user.email")]
     MissingUserEmail,
+    #[error("git config {key} is not valid UTF-8: {details}")]
+    NonUtf8GitConfig { key: &'static str, details: String },
     #[error("invalid review channel {channel:?}: {details}")]
     InvalidChannel { channel: String, details: String },
     #[error("I/O error: {0}")]

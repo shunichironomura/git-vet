@@ -97,15 +97,35 @@ impl TestRepo {
         Self::run_vet_in(self.path(), args)
     }
 
+    fn run_vet_without_user_config(&self, args: &[&str]) -> Output {
+        let empty_global_config = self.path().join(".empty-global-config");
+        require(
+            fs::write(&empty_global_config, ""),
+            "write empty global config",
+        );
+        let mut command = Self::vet_command(self.path(), args);
+        command
+            .env("GIT_CONFIG_GLOBAL", empty_global_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")))
+    }
+
     fn run_vet_in(cwd: &Path, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_git-vet"))
+        Self::vet_command(cwd, args)
+            .output()
+            .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")))
+    }
+
+    fn vet_command(cwd: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_git-vet"));
+        command
             .current_dir(cwd)
             .args(args)
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_PREFIX")
-            .output()
-            .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")))
+            .env_remove("GIT_PREFIX");
+        command
     }
 }
 
@@ -214,6 +234,54 @@ fn mark_makes_a_file_vetted() {
     let diff = repo.run_vet(&["diff", "a.txt"]);
     assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
     assert!(stdout(&diff).contains("a.txt is up to date"));
+}
+
+#[test]
+fn mark_requires_git_config_user_name() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "unset", "user.name"]);
+
+    let mark = repo.run_vet_without_user_config(&["mark", "a.txt"]);
+    assert_eq!(mark.status.code(), Some(2));
+    assert!(stderr(&mark).contains("missing git config user.name"));
+}
+
+#[test]
+fn mark_requires_git_config_user_email() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "unset", "user.email"]);
+
+    let mark = repo.run_vet_without_user_config(&["mark", "a.txt"]);
+    assert_eq!(mark.status.code(), Some(2));
+    assert!(stderr(&mark).contains("missing git config user.email"));
+}
+
+#[test]
+fn mark_rejects_empty_git_config_user_name() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "user.name", ""]);
+
+    let mark = repo.run_vet(&["mark", "a.txt"]);
+    assert_eq!(mark.status.code(), Some(2));
+    assert!(stderr(&mark).contains("missing git config user.name"));
+}
+
+#[test]
+fn mark_rejects_empty_git_config_user_email() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "user.email", ""]);
+
+    let mark = repo.run_vet(&["mark", "a.txt"]);
+    assert_eq!(mark.status.code(), Some(2));
+    assert!(stderr(&mark).contains("missing git config user.email"));
 }
 
 #[test]
