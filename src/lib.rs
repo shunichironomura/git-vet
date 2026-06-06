@@ -3,6 +3,7 @@ use std::env;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
@@ -15,7 +16,8 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
-const NOTES_REF: &str = "refs/notes/vet";
+const NOTES_REF_PREFIX: &str = "refs/notes/vet";
+const DEFAULT_REVIEW_CHANNEL: &str = "default";
 const NOTES_MERGE_STRATEGY_KEY: &str = "notes.mergeStrategy";
 const NOTES_MERGE_STRATEGY: &str = "cat_sort_uniq";
 
@@ -26,6 +28,9 @@ const NOTES_MERGE_STRATEGY: &str = "cat_sort_uniq";
     about = "Track human review state for Git-tracked file contents"
 )]
 pub struct Cli {
+    /// Review channel/pipeline to read or write.
+    #[arg(long, global = true, default_value = DEFAULT_REVIEW_CHANNEL)]
+    channel: String,
     #[command(subcommand)]
     command: CommandKind,
 }
@@ -54,8 +59,9 @@ enum CommandKind {
 
 pub fn run_cli() -> Result<ExitCode, AppError> {
     let cli = Cli::parse();
+    let channel = ReviewChannel::from_str(&cli.channel)?;
     let git = Git::discover()?;
-    let notes = GixNotesStore::new(&git);
+    let notes = GixNotesStore::new(&git, channel.notes_ref().clone());
 
     match cli.command {
         CommandKind::Mark { paths } => {
@@ -63,7 +69,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Status { json, check } => {
-            match status(&git, &notes, StatusMode { json, check })? {
+            match status(&git, &notes, &channel, StatusMode { json, check })? {
                 Gate::Open => Ok(ExitCode::SUCCESS),
                 Gate::Closed => Ok(ExitCode::from(1)),
             }
@@ -102,6 +108,8 @@ pub enum AppError {
     Vetignore(String),
     #[error("missing git config user.email")]
     MissingUserEmail,
+    #[error("invalid review channel {channel:?}: {details}")]
+    InvalidChannel { channel: String, details: String },
     #[error("notes ref points to a {actual}; expected a commit")]
     InvalidNotesRefTarget { actual: &'static str },
     #[error("I/O error: {0}")]
@@ -141,6 +149,92 @@ impl RepoPath {
 impl fmt::Display for RepoPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReviewChannel {
+    name: String,
+    notes_ref: NotesRef,
+}
+
+impl ReviewChannel {
+    fn notes_ref(&self) -> &NotesRef {
+        &self.notes_ref
+    }
+}
+
+impl Default for ReviewChannel {
+    fn default() -> Self {
+        Self::from_str(DEFAULT_REVIEW_CHANNEL)
+            .expect("the built-in default review channel must be a valid notes ref")
+    }
+}
+
+impl FromStr for ReviewChannel {
+    type Err = AppError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if input.is_empty() {
+            return Err(AppError::InvalidChannel {
+                channel: input.to_owned(),
+                details: "channel name must not be empty".to_owned(),
+            });
+        }
+
+        let ref_name = format!("{NOTES_REF_PREFIX}/{input}");
+        let notes_ref = NotesRef::new(ref_name).map_err(|details| AppError::InvalidChannel {
+            channel: input.to_owned(),
+            details,
+        })?;
+
+        Ok(Self {
+            name: input.to_owned(),
+            notes_ref,
+        })
+    }
+}
+
+impl Serialize for ReviewChannel {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.name)
+    }
+}
+
+impl fmt::Display for ReviewChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.name.fmt(f)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NotesRef {
+    name: String,
+    full_name: gix::refs::FullName,
+}
+
+impl NotesRef {
+    fn new(name: String) -> Result<Self, String> {
+        let full_name =
+            gix::refs::FullName::try_from(name.clone()).map_err(|error| error.to_string())?;
+        Ok(Self { name, full_name })
+    }
+
+    fn as_str(&self) -> &str {
+        &self.name
+    }
+
+    fn full_name(&self) -> gix::refs::FullName {
+        self.full_name.clone()
+    }
+}
+
+impl fmt::Display for NotesRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.name.fmt(f)
     }
 }
 
@@ -658,11 +752,12 @@ struct NoteEntry {
 #[derive(Clone)]
 struct GixNotesStore<'git> {
     git: &'git Git,
+    notes_ref: NotesRef,
 }
 
 impl<'git> GixNotesStore<'git> {
-    fn new(git: &'git Git) -> Self {
-        Self { git }
+    fn new(git: &'git Git, notes_ref: NotesRef) -> Self {
+        Self { git, notes_ref }
     }
 
     fn configure_merge_strategy(&self) -> Result<(), AppError> {
@@ -735,7 +830,7 @@ impl<'git> GixNotesStore<'git> {
         let reference = self
             .git
             .repo
-            .try_find_reference(NOTES_REF)
+            .try_find_reference(self.notes_ref.as_str())
             .map_err(|err| git_error("finding notes ref", err))?;
         match reference {
             Some(mut reference) => reference
@@ -755,7 +850,7 @@ impl<'git> GixNotesStore<'git> {
         let Some(mut reference) = self
             .git
             .repo
-            .try_find_reference(NOTES_REF)
+            .try_find_reference(self.notes_ref.as_str())
             .map_err(|err| git_error("finding notes ref", err))?
         else {
             return Ok(None);
@@ -782,7 +877,12 @@ impl<'git> GixNotesStore<'git> {
         let parents = parent.into_iter().collect::<Vec<_>>();
         self.git
             .repo
-            .commit(NOTES_REF, "git-vet notes", tree_id, parents)
+            .commit(
+                self.notes_ref.full_name(),
+                "git-vet notes",
+                tree_id,
+                parents,
+            )
             .map(|_| ())
             .map_err(|err| git_error("committing notes tree", err))
     }
@@ -923,7 +1023,12 @@ fn mark_paths(git: &Git, notes: &impl NotesStore, paths: Vec<PathBuf>) -> Result
     })
 }
 
-fn status(git: &Git, notes: &impl NotesStore, mode: StatusMode) -> Result<Gate, AppError> {
+fn status(
+    git: &Git,
+    notes: &impl NotesStore,
+    channel: &ReviewChannel,
+    mode: StatusMode,
+) -> Result<Gate, AppError> {
     let vetignore = Vetignore::load(&git.root)?;
     let tracked = git
         .tracked_files_at_head()?
@@ -942,8 +1047,8 @@ fn status(git: &Git, notes: &impl NotesStore, mode: StatusMode) -> Result<Gate, 
             classified.sort_by(|left, right| left.path.cmp(&right.path));
 
             match mode.json {
-                true => print_json_status(&classified)?,
-                false => print_human_status(&classified),
+                true => print_json_status(channel, &classified)?,
+                false => print_human_status(channel, &classified),
             }
             Ok(Gate::Open)
         }
@@ -1031,6 +1136,12 @@ fn classify_path(
 }
 
 #[derive(Serialize)]
+struct JsonStatus<'a> {
+    channel: &'a ReviewChannel,
+    files: Vec<JsonStatusRecord<'a>>,
+}
+
+#[derive(Serialize)]
 struct JsonStatusRecord<'a> {
     path: &'a RepoPath,
     state: &'static str,
@@ -1040,8 +1151,11 @@ struct JsonStatusRecord<'a> {
     reviewer: Option<&'a str>,
 }
 
-fn print_json_status(classified: &[ClassifiedFile]) -> Result<(), AppError> {
-    let records = classified
+fn print_json_status(
+    channel: &ReviewChannel,
+    classified: &[ClassifiedFile],
+) -> Result<(), AppError> {
+    let files = classified
         .iter()
         .map(|file| JsonStatusRecord {
             path: &file.path,
@@ -1058,11 +1172,15 @@ fn print_json_status(classified: &[ClassifiedFile]) -> Result<(), AppError> {
                 .map(|metadata| metadata.reviewer.as_str()),
         })
         .collect::<Vec<_>>();
-    println!("{}", serde_json::to_string_pretty(&records)?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&JsonStatus { channel, files })?
+    );
     Ok(())
 }
 
-fn print_human_status(classified: &[ClassifiedFile]) {
+fn print_human_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) {
+    println!("channel: {channel}");
     print_group("vetted", classified, |state| {
         matches!(state, ReviewState::Vetted)
     });
