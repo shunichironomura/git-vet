@@ -344,14 +344,39 @@ fn status_check_is_channel_specific() {
 }
 
 #[test]
-fn invalid_channel_names_exit_two() {
+fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
 
-    let output = repo.run_vet(&["status", "--channel", "bad..channel"]);
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("invalid review channel"));
+    // Channel validation intentionally delegates exact refname compatibility to
+    // `git check-ref-format refs/notes/vet/<channel>`.
+    for channel in [
+        "bad..channel",
+        ".hidden",
+        "foo.lock",
+        "foo//bar",
+        "foo bar",
+        "foo@{bar",
+        "foo:bar",
+        "foo*bar",
+    ] {
+        let output = repo.run_vet(&["status", "--channel", channel]);
+        assert_eq!(output.status.code(), Some(2), "channel {channel:?}");
+        let stderr = stderr(&output);
+        assert!(stderr.contains("invalid review channel"), "{stderr}");
+        assert!(stderr.contains("git check-ref-format"), "{stderr}");
+    }
+}
+
+#[test]
+fn valid_channel_names_can_contain_slashes() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let document = status_json_document(&repo, &["status", "--json", "--channel", "team/security"]);
+    assert_eq!(document["channel"], "team/security");
 }
 
 #[test]

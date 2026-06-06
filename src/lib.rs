@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod error;
 mod git;
+mod git_ref_format;
 mod git_types;
 mod notes;
 mod path;
