@@ -1,22 +1,22 @@
 lint:
-    RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets --all-features
-    RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets --no-default-features
+    RUSTFLAGS="-Dwarnings" cargo clippy --all-targets --all-features
+    RUSTFLAGS="-Dwarnings" cargo clippy --all-targets --no-default-features
     cargo fmt --check
-    RUSTDOCFLAGS="-Dwarnings" cargo doc --workspace --no-deps
-    cargo check --workspace
+    RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps
+    cargo check
 
 test:
-    cargo test --workspace
+    cargo test
 
 coverage:
-    cargo llvm-cov --workspace --html
+    cargo llvm-cov --html
     @echo "Coverage report generated at target/llvm-cov/html/index.html"
 
 coverage-open:
-    cargo llvm-cov --workspace --html --open
+    cargo llvm-cov --html --open
 
 coverage-lcov:
-    cargo llvm-cov --workspace --lcov --output-path lcov.info
+    cargo llvm-cov --lcov --output-path lcov.info
 
 coverage-clean:
-    cargo llvm-cov clean --workspace
+    cargo llvm-cov clean
