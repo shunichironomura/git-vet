@@ -7,7 +7,7 @@ use chrono::{SecondsFormat, Utc};
 
 use crate::channel::ReviewChannel;
 use crate::error::AppError;
-use crate::git::Git;
+use crate::git::{Git, HistoryChange, HistoryChangeStatus};
 use crate::git_types::{BlobOid, TrackedFile};
 use crate::notes::{NoteRemoval, NotesStore};
 use crate::path::RepoPath;
@@ -120,10 +120,7 @@ pub fn status(
         .collect::<Vec<_>>();
     let reviewed = notes.list_reviewed()?;
 
-    let mut classified = tracked
-        .iter()
-        .map(|file| classify_path(git, file, &reviewed))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut classified = classify_tracked_files(&tracked, &reviewed, || git.history_changes())?;
     classified.sort_by(|left, right| left.path.cmp(&right.path));
 
     if mode.check {
@@ -283,16 +280,51 @@ fn classify_path(
     file: &TrackedFile,
     reviewed: &ReviewedSet,
 ) -> Result<ClassifiedFile, AppError> {
+    let mut historical_blobs = |file: &TrackedFile| git.historical_blobs(&file.path, &file.blob);
+    classify_file(file, reviewed, &mut historical_blobs)
+}
+
+fn classify_tracked_files(
+    files: &[TrackedFile],
+    reviewed: &ReviewedSet,
+    history_changes: impl FnOnce() -> Result<Vec<HistoryChange>, AppError>,
+) -> Result<Vec<ClassifiedFile>, AppError> {
+    if reviewed.is_empty() {
+        return Ok(files.iter().map(classify_new_file).collect());
+    }
+
+    let mut classified = files
+        .iter()
+        .map(|file| classify_file_from_current_blob(file, reviewed))
+        .collect::<Vec<_>>();
+    let mut active = active_unreviewed_paths(files, reviewed);
+    if active.is_empty() {
+        return Ok(classified);
+    }
+
+    for change in history_changes()? {
+        apply_history_change(&mut classified, &mut active, reviewed, &change);
+        if active.is_empty() {
+            break;
+        }
+    }
+
+    Ok(classified)
+}
+
+fn classify_file(
+    file: &TrackedFile,
+    reviewed: &ReviewedSet,
+    historical_blobs: &mut impl FnMut(&TrackedFile) -> Result<Vec<BlobOid>, AppError>,
+) -> Result<ClassifiedFile, AppError> {
+    if reviewed.is_empty() {
+        return Ok(classify_new_file(file));
+    }
+
     if reviewed.contains(&file.blob) {
-        Ok(ClassifiedFile {
-            path: file.path.clone(),
-            state: ReviewState::Vetted,
-            blob: file.blob,
-            metadata: reviewed.metadata(&file.blob),
-        })
+        Ok(classify_vetted_file(file, reviewed))
     } else {
-        let baseline = git
-            .historical_blobs(&file.path, &file.blob)?
+        let baseline = historical_blobs(file)?
             .into_iter()
             .find(|blob| reviewed.contains(blob));
         let metadata = baseline.as_ref().and_then(|blob| reviewed.metadata(blob));
@@ -306,14 +338,132 @@ fn classify_path(
     }
 }
 
+fn classify_file_from_current_blob(file: &TrackedFile, reviewed: &ReviewedSet) -> ClassifiedFile {
+    if reviewed.contains(&file.blob) {
+        classify_vetted_file(file, reviewed)
+    } else {
+        classify_new_file(file)
+    }
+}
+
+fn classify_vetted_file(file: &TrackedFile, reviewed: &ReviewedSet) -> ClassifiedFile {
+    ClassifiedFile {
+        path: file.path.clone(),
+        state: ReviewState::Vetted,
+        blob: file.blob,
+        metadata: reviewed.metadata(&file.blob),
+    }
+}
+
+fn classify_new_file(file: &TrackedFile) -> ClassifiedFile {
+    ClassifiedFile {
+        path: file.path.clone(),
+        state: ReviewState::New,
+        blob: file.blob,
+        metadata: None,
+    }
+}
+
+fn active_unreviewed_paths(
+    files: &[TrackedFile],
+    reviewed: &ReviewedSet,
+) -> BTreeMap<RepoPath, Vec<usize>> {
+    files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| !reviewed.contains(&file.blob))
+        .fold(BTreeMap::new(), |mut active, (index, file)| {
+            active.entry(file.path.clone()).or_default().push(index);
+            active
+        })
+}
+
+fn apply_history_change(
+    classified: &mut [ClassifiedFile],
+    active: &mut BTreeMap<RepoPath, Vec<usize>>,
+    reviewed: &ReviewedSet,
+    change: &HistoryChange,
+) {
+    let Some(after_path) = &change.after_path else {
+        return;
+    };
+    let Some(indices) = active.remove(after_path) else {
+        return;
+    };
+
+    let mut still_active = Vec::new();
+    for index in indices {
+        match change.before_blob.filter(|blob| reviewed.contains(blob)) {
+            Some(baseline) => {
+                classified[index].state = ReviewState::Stale { baseline };
+                classified[index].metadata = reviewed.metadata(&baseline);
+            }
+            None if history_change_keeps_path(change.status) => still_active.push(index),
+            None => {}
+        }
+    }
+
+    if !still_active.is_empty() {
+        let previous_path = match change.status {
+            HistoryChangeStatus::Renamed => &change.before_path,
+            HistoryChangeStatus::Modified | HistoryChangeStatus::TypeChanged => after_path,
+            HistoryChangeStatus::Added
+            | HistoryChangeStatus::Copied
+            | HistoryChangeStatus::Deleted => return,
+        };
+        active
+            .entry(previous_path.clone())
+            .or_default()
+            .extend(still_active);
+    }
+}
+
+const fn history_change_keeps_path(status: HistoryChangeStatus) -> bool {
+    matches!(
+        status,
+        HistoryChangeStatus::Modified
+            | HistoryChangeStatus::Renamed
+            | HistoryChangeStatus::TypeChanged
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io::Cursor;
 
     use super::*;
+    use crate::review::ReviewInfo;
 
     fn dirty_paths() -> Result<Vec<RepoPath>, AppError> {
         Ok(vec![RepoPath::from_git_path("src/lib.rs")?])
+    }
+
+    fn blob(hex: &str) -> Result<BlobOid, AppError> {
+        gix::ObjectId::from_hex(hex.as_bytes())
+            .map(BlobOid::new)
+            .map_err(|err| crate::error::git_error("parsing test blob oid", err))
+    }
+
+    fn tracked(path: &str, blob: BlobOid) -> Result<TrackedFile, AppError> {
+        Ok(TrackedFile {
+            path: RepoPath::from_git_path(path)?,
+            blob,
+        })
+    }
+
+    fn change(
+        status: HistoryChangeStatus,
+        before_path: &str,
+        after_path: Option<&str>,
+        before_blob: Option<BlobOid>,
+    ) -> Result<HistoryChange, AppError> {
+        Ok(HistoryChange {
+            status,
+            before_path: RepoPath::from_git_path(before_path)?,
+            after_path: after_path.map(RepoPath::from_git_path).transpose()?,
+            before_blob,
+        })
     }
 
     #[test]
@@ -334,6 +484,100 @@ mod tests {
         assert!(output.contains("uncommitted changes relative to HEAD"));
         assert!(output.contains("src/lib.rs"));
         assert!(output.contains("Proceed with the committed HEAD version? [y/N]"));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_reviewed_set_classifies_everything_new_without_history_walk() -> Result<(), AppError> {
+        let files = vec![
+            tracked("a.txt", blob("1111111111111111111111111111111111111111")?)?,
+            tracked("b.txt", blob("2222222222222222222222222222222222222222")?)?,
+        ];
+        let history_calls = Cell::new(0);
+
+        let classified = classify_tracked_files(&files, &ReviewedSet::default(), || {
+            history_calls.set(history_calls.get() + 1);
+            Ok(Vec::new())
+        })?;
+
+        assert_eq!(history_calls.get(), 0);
+        assert!(
+            classified
+                .iter()
+                .all(|file| matches!(file.state, ReviewState::New))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_empty_reviewed_set_uses_one_bulk_history_walk() -> Result<(), AppError> {
+        let reviewed_blob = blob("1111111111111111111111111111111111111111")?;
+        let stale_blob = blob("2222222222222222222222222222222222222222")?;
+        let baseline_blob = blob("3333333333333333333333333333333333333333")?;
+        let files = vec![
+            tracked("reviewed.txt", reviewed_blob)?,
+            tracked("stale.txt", stale_blob)?,
+        ];
+        let mut reviewed = ReviewedSet::default();
+        reviewed
+            .by_blob
+            .insert(reviewed_blob, ReviewInfo::default());
+        reviewed
+            .by_blob
+            .insert(baseline_blob, ReviewInfo::default());
+        let history_calls = Cell::new(0);
+
+        let classified = classify_tracked_files(&files, &reviewed, || {
+            history_calls.set(history_calls.get() + 1);
+            Ok(vec![change(
+                HistoryChangeStatus::Modified,
+                "stale.txt",
+                Some("stale.txt"),
+                Some(baseline_blob),
+            )?])
+        })?;
+
+        assert_eq!(history_calls.get(), 1);
+        assert!(matches!(classified[0].state, ReviewState::Vetted));
+        assert!(matches!(
+            classified[1].state,
+            ReviewState::Stale { baseline } if baseline == baseline_blob
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn bulk_history_walk_follows_renames_back_to_reviewed_baseline() -> Result<(), AppError> {
+        let current_blob = blob("1111111111111111111111111111111111111111")?;
+        let intermediate_blob = blob("2222222222222222222222222222222222222222")?;
+        let baseline_blob = blob("3333333333333333333333333333333333333333")?;
+        let files = vec![tracked("new.txt", current_blob)?];
+        let mut reviewed = ReviewedSet::default();
+        reviewed
+            .by_blob
+            .insert(baseline_blob, ReviewInfo::default());
+
+        let classified = classify_tracked_files(&files, &reviewed, || {
+            Ok(vec![
+                change(
+                    HistoryChangeStatus::Modified,
+                    "new.txt",
+                    Some("new.txt"),
+                    Some(intermediate_blob),
+                )?,
+                change(
+                    HistoryChangeStatus::Renamed,
+                    "old.txt",
+                    Some("new.txt"),
+                    Some(baseline_blob),
+                )?,
+            ])
+        })?;
+
+        assert!(matches!(
+            classified[0].state,
+            ReviewState::Stale { baseline } if baseline == baseline_blob
+        ));
         Ok(())
     }
 

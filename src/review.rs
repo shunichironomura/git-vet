@@ -60,6 +60,10 @@ pub struct ReviewedSet {
 }
 
 impl ReviewedSet {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_blob.is_empty()
+    }
+
     pub(crate) fn contains(&self, oid: &BlobOid) -> bool {
         self.by_blob.contains_key(oid)
     }
