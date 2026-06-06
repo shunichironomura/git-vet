@@ -15,10 +15,6 @@ impl Vetter {
     pub(crate) const fn new(name: String, email: String) -> Self {
         Self { name, email }
     }
-
-    pub(crate) fn display(&self) -> String {
-        format!("{} <{}>", self.name, self.email)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -46,6 +46,9 @@ enum CommandKind {
         /// Emit stable machine-readable JSON.
         #[arg(long)]
         json: bool,
+        /// Include files that are already vetted in human-readable output.
+        #[arg(long)]
+        all: bool,
         /// Exit 1 when any in-scope tracked file is unreviewed.
         #[arg(long)]
         check: bool,
@@ -82,8 +85,8 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             unmark_paths(&git, &notes, &paths)?;
             Ok(ExitCode::SUCCESS)
         }
-        CommandKind::Status { json, check } => {
-            match status(&git, &notes, &channel, StatusMode { json, check })? {
+        CommandKind::Status { json, all, check } => {
+            match status(&git, &notes, &channel, StatusMode { json, all, check })? {
                 Gate::Open => Ok(ExitCode::SUCCESS),
                 Gate::Closed => Ok(ExitCode::from(1)),
             }

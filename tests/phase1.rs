@@ -293,6 +293,98 @@ fn mark_makes_a_file_vetted() {
 }
 
 #[test]
+fn human_status_is_backlog_first_and_hides_vetted_by_default() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "reviewed\n");
+    repo.write("b.txt", "reviewed then changed\n");
+    repo.write("c.txt", "never reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt", "b.txt"]).status.success());
+    repo.write("b.txt", "reviewed then changed\nagain\n");
+    repo.commit_all("edit b");
+
+    let status = repo.run_vet(&["status"]);
+    assert!(
+        status.status.success(),
+        "status failed: {}",
+        stderr(&status)
+    );
+    let output = stdout(&status);
+
+    assert!(output.contains("git vet · channel default"), "{output}");
+    assert!(output.contains("1/3 vetted"), "{output}");
+    assert!(
+        output.contains("2 files need review: 1 new, 1 stale"),
+        "{output}"
+    );
+    assert!(output.contains("New — never reviewed:"), "{output}");
+    assert!(output.contains("✗ c.txt"), "{output}");
+    assert!(
+        output.contains("Stale — changed since last review:"),
+        "{output}"
+    );
+    assert!(output.contains("~ b.txt"), "{output}");
+    assert!(output.contains("last reviewed"), "{output}");
+    assert!(output.contains("Reviewer"), "{output}");
+    assert!(output.contains("1 vetted file hidden"), "{output}");
+    assert!(!output.contains("✓ a.txt"), "{output}");
+    assert!(output.contains("git vet diff <path>"), "{output}");
+    assert!(output.contains("git vet mark <path>"), "{output}");
+}
+
+#[test]
+fn human_status_all_shows_vetted_files_after_backlog() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "reviewed\n");
+    repo.write("b.txt", "never reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let status = repo.run_vet(&["status", "--all"]);
+    assert!(
+        status.status.success(),
+        "status failed: {}",
+        stderr(&status)
+    );
+    let output = stdout(&status);
+
+    assert!(
+        output.contains("1 file needs review: 1 new, 0 stale"),
+        "{output}"
+    );
+    assert!(output.contains("✗ b.txt"), "{output}");
+    assert!(output.contains("Vetted:"), "{output}");
+    assert!(output.contains("✓ a.txt"), "{output}");
+    assert!(output.contains("reviewed"), "{output}");
+    assert!(!output.contains("hidden"), "{output}");
+}
+
+#[test]
+fn status_check_reports_review_state_with_gate_summary() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "reviewed\n");
+    repo.write("b.txt", "reviewed then changed\n");
+    repo.write("c.txt", "never reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt", "b.txt"]).status.success());
+    repo.write("b.txt", "reviewed then changed\nagain\n");
+    repo.commit_all("edit b");
+
+    let check = repo.run_vet(&["status", "--check"]);
+    assert_eq!(check.status.code(), Some(1));
+    let output = stdout(&check);
+
+    assert!(
+        output.contains("Review gate failed for channel default."),
+        "{output}"
+    );
+    assert!(output.contains("2 files need review:"), "{output}");
+    assert!(output.contains("stale  b.txt"), "{output}");
+    assert!(output.contains("new    c.txt"), "{output}");
+    assert!(!output.contains("a.txt"), "{output}");
+}
+
+#[test]
 fn mark_dirty_path_fails_noninteractive_without_allow_dirty() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");

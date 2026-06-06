@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -11,12 +12,13 @@ use crate::git_types::{BlobOid, TrackedFile};
 use crate::notes::{NoteRemoval, NotesStore};
 use crate::path::RepoPath;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
-use crate::status_output::{human_status, json_status};
+use crate::status_output::{HumanStatusOptions, check_status, human_status, json_status};
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
 pub struct StatusMode {
     pub(crate) json: bool,
+    pub(crate) all: bool,
     pub(crate) check: bool,
 }
 
@@ -118,39 +120,43 @@ pub fn status(
         .collect::<Vec<_>>();
     let reviewed = notes.list_reviewed()?;
 
-    if mode.check {
-        check_status(&tracked, &reviewed)
-    } else {
-        let mut classified = tracked
-            .iter()
-            .map(|file| classify_path(git, file, &reviewed))
-            .collect::<Result<Vec<_>, _>>()?;
-        classified.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut classified = tracked
+        .iter()
+        .map(|file| classify_path(git, file, &reviewed))
+        .collect::<Result<Vec<_>, _>>()?;
+    classified.sort_by(|left, right| left.path.cmp(&right.path));
 
+    if mode.check {
+        let gate = if classified
+            .iter()
+            .all(|file| matches!(file.state, ReviewState::Vetted))
+        {
+            Gate::Open
+        } else {
+            Gate::Closed
+        };
+        stdout_str(&check_status(channel, &classified))?;
+        Ok(gate)
+    } else {
         let output = if mode.json {
             json_status(channel, &classified)?
         } else {
-            human_status(channel, &classified)
+            human_status(
+                channel,
+                &classified,
+                HumanStatusOptions {
+                    show_all: mode.all,
+                    color: human_status_color_enabled(),
+                },
+            )
         };
         stdout_str(&output)?;
         Ok(Gate::Open)
     }
 }
 
-fn check_status(tracked: &[TrackedFile], reviewed: &ReviewedSet) -> Result<Gate, AppError> {
-    let unreviewed = tracked
-        .iter()
-        .filter(|file| !reviewed.contains(&file.blob))
-        .collect::<Vec<_>>();
-
-    if unreviewed.is_empty() {
-        Ok(Gate::Open)
-    } else {
-        for file in unreviewed {
-            stdout_line(format_args!("{}", file.path))?;
-        }
-        Ok(Gate::Closed)
-    }
+fn human_status_color_enabled() -> bool {
+    io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
 }
 
 pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), AppError> {
