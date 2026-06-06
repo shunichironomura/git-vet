@@ -8,9 +8,6 @@ use crate::git::Git;
 use crate::git_types::BlobOid;
 use crate::review::{ReviewInfo, ReviewedSet, parse_note_records};
 
-const NOTES_MERGE_STRATEGY_KEY: &str = "notes.mergeStrategy";
-const NOTES_MERGE_STRATEGY: &str = "cat_sort_uniq";
-
 pub trait NotesStore {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError>;
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError>;
@@ -32,21 +29,6 @@ pub struct GitNotesStore<'git> {
 impl<'git> GitNotesStore<'git> {
     pub(crate) const fn new(git: &'git Git, notes_ref: NotesRef) -> Self {
         Self { git, notes_ref }
-    }
-
-    fn configure_merge_strategy(&self) -> Result<(), AppError> {
-        self.git_output(
-            "configuring notes merge strategy",
-            [
-                "config",
-                "set",
-                "--local",
-                "--all",
-                NOTES_MERGE_STRATEGY_KEY,
-                NOTES_MERGE_STRATEGY,
-            ],
-        )?;
-        Ok(())
     }
 
     fn note_entries(&self) -> Result<Vec<NoteListEntry>, AppError> {
@@ -145,7 +127,6 @@ impl NotesStore for GitNotesStore<'_> {
     }
 
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError> {
-        self.configure_merge_strategy()?;
         let ref_arg = self.notes_ref_arg();
         let oid_arg = oid.to_string();
         self.git_output_with_stdin(

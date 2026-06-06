@@ -104,7 +104,7 @@ The body is an append-only set of review records, one per line, so the same cont
 - `commit` — the `HEAD` SHA at vet time (provenance; the blob is the real key).
 - `path` — the path vetted (provenance only; a blob can appear at multiple paths).
 
-Records are sorted/deduplicated by the notes merge strategy (§5.4), so re-marking identical content is idempotent.
+Records are stored sorted/deduplicated by `git-vet`, and notes merges use the same line-unioning semantics (§5.4), so re-marking identical content is idempotent.
 
 ### 5.3 Sync
 
@@ -116,11 +116,13 @@ Notes refs are **not** pushed or fetched by default. The tool must make this eas
 
 ### 5.4 Merge strategy
 
-Concurrent sign-offs (different machines, different blobs) must not clobber each other. Configure a line-unioning strategy for the ref:
+Concurrent sign-offs (different machines, different blobs) must not clobber each other. `git-vet` must not mutate repository or user Git config automatically for this. When `git-vet` merges notes refs, it passes the line-unioning strategy explicitly for that merge:
 
+```sh
+git notes --ref=vet/<channel> merge -s cat_sort_uniq <notes-ref>
 ```
-git config notes.mergeStrategy cat_sort_uniq
-```
+
+If an equivalent Git operation lacks a dedicated strategy option, use command-scoped config (`git -c notes.mergeStrategy=cat_sort_uniq ...`) instead of persistent config. Users who merge `refs/notes/vet/*` manually may optionally configure `notes.mergeStrategy=cat_sort_uniq` themselves.
 
 With per-blob, line-record bodies this makes merges conflict-free for the common case (different blobs → different note objects; same blob → records union/dedup).
 
