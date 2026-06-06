@@ -92,20 +92,28 @@ impl TestRepo {
 }
 
 fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) {
-    let output = Command::new("git")
+    assert_git_success(git_output(cwd, args));
+}
+
+fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Output {
+    Command::new("git")
         .current_dir(cwd)
         .args(args)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_PREFIX")
         .output()
-        .expect("run git");
+        .expect("run git")
+}
+
+fn assert_git_success(output: Output) -> Output {
     assert!(
         output.status.success(),
         "git failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    output
 }
 
 fn stdout(output: &Output) -> String {
@@ -166,6 +174,52 @@ fn mark_makes_a_file_vetted() {
     let diff = repo.run_vet(&["diff", "a.txt"]);
     assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
     assert!(stdout(&diff).contains("a.txt is up to date"));
+}
+
+#[test]
+fn mark_writes_standard_git_notes() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let mark = repo.run_vet(&["mark", "a.txt"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+
+    let note = assert_git_success(git_output(
+        repo.path(),
+        ["notes", "--ref=vet", "show", "HEAD:a.txt"],
+    ));
+    let note = stdout(&note);
+    assert!(note.contains("reviewer=reviewer@example.com"), "{note}");
+    assert!(note.contains("path=a.txt"), "{note}");
+
+    let strategy = assert_git_success(git_output(
+        repo.path(),
+        ["config", "--get", "notes.mergeStrategy"],
+    ));
+    assert_eq!(stdout(&strategy), "cat_sort_uniq\n");
+}
+
+#[test]
+fn status_reads_standard_git_notes() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    let head = assert_git_success(git_output(repo.path(), ["rev-parse", "HEAD"]));
+    let head = stdout(&head).trim().to_owned();
+    let note = format!(
+        "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit={head} path=a.txt"
+    );
+    run_git(
+        repo.path(),
+        ["notes", "--ref=vet", "add", "-m", &note, "HEAD:a.txt"],
+    );
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "vetted");
+    assert_eq!(record["reviewer"], "reviewer@example.com");
+    assert_eq!(record["last_reviewed_at"], "2026-06-06T00:00:00Z");
 }
 
 #[test]
