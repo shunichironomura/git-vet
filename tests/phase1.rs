@@ -125,7 +125,25 @@ fn stderr(output: &Output) -> String {
 }
 
 fn status_json(repo: &TestRepo) -> Vec<Value> {
-    let output = repo.run_vet(&["status", "--json"]);
+    status_json_with_args(repo, &["status", "--json"])
+}
+
+fn status_json_with_args(repo: &TestRepo, args: &[&str]) -> Vec<Value> {
+    let output = repo.run_vet(args);
+    assert!(
+        output.status.success(),
+        "status --json failed: {}",
+        stderr(&output)
+    );
+    let document: Value = serde_json::from_slice(&output.stdout).expect("status JSON");
+    document["files"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing files array in status JSON: {document:#?}"))
+        .clone()
+}
+
+fn status_json_document(repo: &TestRepo, args: &[&str]) -> Value {
+    let output = repo.run_vet(args);
     assert!(
         output.status.success(),
         "status --json failed: {}",
@@ -147,9 +165,11 @@ fn empty_notes_ref_means_tracked_files_are_new() {
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
 
-    let records = status_json(&repo);
+    let document = status_json_document(&repo, &["status", "--json"]);
+    let records = document["files"].as_array().expect("files array");
 
-    let record = record_for(&records, "a.txt");
+    assert_eq!(document["channel"], "default");
+    let record = record_for(records, "a.txt");
     assert_eq!(record["state"], "new");
     assert!(record["baseline"].is_null());
     assert!(record["last_reviewed_at"].is_null());
@@ -177,7 +197,7 @@ fn mark_makes_a_file_vetted() {
 }
 
 #[test]
-fn mark_writes_standard_git_notes() {
+fn mark_writes_default_channel_git_notes() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
@@ -187,7 +207,7 @@ fn mark_writes_standard_git_notes() {
 
     let note = assert_git_success(git_output(
         repo.path(),
-        ["notes", "--ref=vet", "show", "HEAD:a.txt"],
+        ["notes", "--ref=vet/default", "show", "HEAD:a.txt"],
     ));
     let note = stdout(&note);
     assert!(note.contains("reviewer=reviewer@example.com"), "{note}");
@@ -201,7 +221,7 @@ fn mark_writes_standard_git_notes() {
 }
 
 #[test]
-fn status_reads_standard_git_notes() {
+fn status_reads_default_channel_git_notes() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
@@ -212,7 +232,14 @@ fn status_reads_standard_git_notes() {
     );
     run_git(
         repo.path(),
-        ["notes", "--ref=vet", "add", "-m", &note, "HEAD:a.txt"],
+        [
+            "notes",
+            "--ref=vet/default",
+            "add",
+            "-m",
+            &note,
+            "HEAD:a.txt",
+        ],
     );
 
     let records = status_json(&repo);
@@ -220,6 +247,84 @@ fn status_reads_standard_git_notes() {
     assert_eq!(record["state"], "vetted");
     assert_eq!(record["reviewer"], "reviewer@example.com");
     assert_eq!(record["last_reviewed_at"], "2026-06-06T00:00:00Z");
+}
+
+#[test]
+fn review_channels_are_independent() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let mark_default = repo.run_vet(&["mark", "a.txt"]);
+    assert!(
+        mark_default.status.success(),
+        "default mark failed: {}",
+        stderr(&mark_default)
+    );
+
+    let default_records = status_json(&repo);
+    let default_record = record_for(&default_records, "a.txt");
+    assert_eq!(default_record["state"], "vetted");
+
+    let security_document =
+        status_json_document(&repo, &["status", "--json", "--channel", "security"]);
+    assert_eq!(security_document["channel"], "security");
+    let security_records = security_document["files"].as_array().expect("files array");
+    let security_record = record_for(security_records, "a.txt");
+    assert_eq!(security_record["state"], "new");
+
+    let mark_security = repo.run_vet(&["mark", "a.txt", "--channel", "security"]);
+    assert!(
+        mark_security.status.success(),
+        "security mark failed: {}",
+        stderr(&mark_security)
+    );
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    let security_record = record_for(&security_records, "a.txt");
+    assert_eq!(security_record["state"], "vetted");
+
+    let security_note = assert_git_success(git_output(
+        repo.path(),
+        ["notes", "--ref=vet/security", "show", "HEAD:a.txt"],
+    ));
+    assert!(
+        stdout(&security_note).contains("reviewer=reviewer@example.com"),
+        "{}",
+        stdout(&security_note)
+    );
+}
+
+#[test]
+fn status_check_is_channel_specific() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let default_check = repo.run_vet(&["status", "--check"]);
+    assert!(
+        default_check.status.success(),
+        "default check failed: {}",
+        stderr(&default_check)
+    );
+
+    let security_check = repo.run_vet(&["--channel", "security", "status", "--check"]);
+    assert_eq!(security_check.status.code(), Some(1));
+    assert!(stdout(&security_check).contains("a.txt"));
+}
+
+#[test]
+fn invalid_channel_names_exit_two() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let output = repo.run_vet(&["status", "--channel", "bad..channel"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("invalid review channel"));
 }
 
 #[test]
@@ -237,6 +342,13 @@ fn editing_and_committing_a_marked_file_makes_it_stale() {
     assert_eq!(record["state"], "stale");
     assert!(!record["baseline"].is_null());
     assert_eq!(record["reviewer"], "reviewer@example.com");
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    let security_record = record_for(&security_records, "a.txt");
+    assert_eq!(security_record["state"], "new");
+    assert!(security_record["baseline"].is_null());
+    assert!(security_record["reviewer"].is_null());
 }
 
 #[test]
