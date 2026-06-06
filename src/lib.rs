@@ -1160,10 +1160,8 @@ impl Vetignore {
     fn load(root: &Path) -> Result<Self, AppError> {
         let path = root.join(".vetignore");
         let mut builder = GitignoreBuilder::new(root);
-        if path.exists() {
-            if let Some(error) = builder.add(&path) {
-                return Err(AppError::Vetignore(error.to_string()));
-            }
+        if let Some(error) = path.exists().then(|| builder.add(&path)).flatten() {
+            return Err(AppError::Vetignore(error.to_string()));
         }
         let matcher = builder
             .build()
