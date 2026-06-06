@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::path::RepoPath;
 
 #[derive(Debug)]
-pub(crate) struct Vetignore {
+pub struct Vetignore {
     matcher: Gitignore,
 }
 

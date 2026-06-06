@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use gix::bstr::ByteSlice;
@@ -13,7 +14,7 @@ use crate::path::{
     RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr, repo_path_from_relative,
 };
 
-pub(crate) struct Git {
+pub struct Git {
     pub(crate) repo: gix::Repository,
     pub(crate) root: PathBuf,
     prefix: PathBuf,
@@ -37,9 +38,10 @@ impl Git {
     }
 
     pub(crate) fn normalize_user_path(&self, input: &Path) -> Result<RepoPath, AppError> {
-        let joined = match input.is_absolute() {
-            true => input.to_path_buf(),
-            false => self.root.join(&self.prefix).join(input),
+        let joined = if input.is_absolute() {
+            input.to_path_buf()
+        } else {
+            self.root.join(&self.prefix).join(input)
         };
         let normalized = normalize_lexically(&joined);
         let root = normalize_lexically(&self.root);
@@ -79,10 +81,8 @@ impl Git {
             .repo
             .head_tree()
             .map_err(|err| git_error("reading HEAD tree", err))?;
-        match self.lookup_file_in_tree(&tree, path)? {
-            Some(file) => Ok(file),
-            None => Err(AppError::PathNotTracked(path.clone())),
-        }
+        Self::lookup_file_in_tree(&tree, path)?
+            .ok_or_else(|| AppError::PathNotTracked(path.clone()))
     }
 
     pub(crate) fn head_commit(&self) -> Result<CommitOid, AppError> {
@@ -103,9 +103,10 @@ impl Git {
             .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
             .trim()
             .to_owned();
-        match reviewer.is_empty() {
-            true => Err(AppError::MissingUserEmail),
-            false => Ok(reviewer),
+        if reviewer.is_empty() {
+            Err(AppError::MissingUserEmail)
+        } else {
+            Ok(reviewer)
         }
     }
 
@@ -139,7 +140,7 @@ impl Git {
             let tree = commit
                 .tree()
                 .map_err(|err| git_error("reading historical tree", err))?;
-            if let Some(file) = self.lookup_file_in_tree(&tree, &followed_path)? {
+            if let Some(file) = Self::lookup_file_in_tree(&tree, &followed_path)? {
                 if file.blob != *current && previous_blob != Some(file.blob) {
                     history.push(HistoricalBlob {
                         blob: file.blob,
@@ -185,16 +186,16 @@ impl Git {
         baseline: Option<&HistoricalBlob>,
         current: &TrackedFile,
     ) -> Result<String, AppError> {
-        let old_label = baseline
-            .map(|_| format!("a/{}", current.path))
-            .unwrap_or_else(|| "/dev/null".to_owned());
+        let old_label =
+            baseline.map_or_else(|| "/dev/null".to_owned(), |_| format!("a/{}", current.path));
         let new_label = format!("b/{}", current.path);
         let old_blob = baseline.map(|baseline| baseline.blob);
         let old_mode = baseline.map(|baseline| baseline.mode);
-        let old_id = old_blob
-            .map(|oid| oid.as_object_id())
-            .unwrap_or_else(|| gix::ObjectId::null(self.repo.object_hash()));
-        let old_kind = old_mode.map(|mode| mode.kind()).unwrap_or(EntryKind::Blob);
+        let old_id = old_blob.map_or_else(
+            || gix::ObjectId::null(self.repo.object_hash()),
+            |oid| oid.as_object_id(),
+        );
+        let old_kind = old_mode.map_or(EntryKind::Blob, FileMode::kind);
         let mut cache = self
             .repo
             .diff_resource_cache_for_tree_diff()
@@ -220,45 +221,15 @@ impl Git {
             .map_err(|err| git_error("setting diff destination", err))?;
         cache.options.skip_internal_diff_if_external_is_configured = false;
 
-        let mut output = String::new();
-        output.push_str(&format!(
-            "diff --git a/{path} b/{path}\n",
-            path = current.path
-        ));
-        match baseline {
-            Some(baseline) if baseline.mode != current.mode => {
-                output.push_str(&format!("old mode {}\n", baseline.mode.as_octal()));
-                output.push_str(&format!("new mode {}\n", current.mode.as_octal()));
-                output.push_str(&format!(
-                    "index {}..{}\n",
-                    baseline.blob.short(),
-                    current.blob.short()
-                ));
-            }
-            Some(baseline) => {
-                output.push_str(&format!(
-                    "index {}..{} {}\n",
-                    baseline.blob.short(),
-                    current.blob.short(),
-                    current.mode.as_octal()
-                ));
-            }
-            None => {
-                output.push_str(&format!("new file mode {}\n", current.mode.as_octal()));
-                output.push_str(&format!(
-                    "index {}..{}\n",
-                    zero_oid(self.repo.object_hash()),
-                    current.blob.short()
-                ));
-            }
-        }
+        let mut output = self.diff_header(baseline, current)?;
 
         let prepared = cache
             .prepare_diff()
             .map_err(|err| git_error("preparing blob diff", err))?;
         match prepared.operation {
             Operation::InternalDiff { algorithm } => {
-                output.push_str(&format!("--- {old_label}\n+++ {new_label}\n"));
+                writeln!(&mut output, "--- {old_label}\n+++ {new_label}")
+                    .map_err(|err| git_error("rendering diff header", err))?;
                 let input = prepared.interned_input();
                 let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
                 let hunk = UnifiedDiff::new(
@@ -271,18 +242,75 @@ impl Git {
                 output.push_str(&String::from_utf8_lossy(&hunk));
             }
             Operation::SourceOrDestinationIsBinary => {
-                output.push_str(&format!(
-                    "Binary files {old_label} and {new_label} differ\n"
+                writeln!(
+                    &mut output,
+                    "Binary files {old_label} and {new_label} differ"
+                )
+                .map_err(|err| git_error("rendering binary diff", err))?;
+            }
+            Operation::ExternalCommand { .. } => {
+                return Err(git_error(
+                    "rendering blob diff",
+                    "external diffs are disabled but gix selected an external command",
                 ));
             }
-            Operation::ExternalCommand { .. } => unreachable!("external diffs are disabled"),
         }
 
         Ok(output)
     }
 
-    fn lookup_file_in_tree(
+    fn diff_header(
         &self,
+        baseline: Option<&HistoricalBlob>,
+        current: &TrackedFile,
+    ) -> Result<String, AppError> {
+        let mut output = String::new();
+        writeln!(
+            &mut output,
+            "diff --git a/{path} b/{path}",
+            path = current.path
+        )
+        .map_err(|err| git_error("rendering diff header", err))?;
+        match baseline {
+            Some(baseline) if baseline.mode != current.mode => {
+                writeln!(&mut output, "old mode {}", baseline.mode.as_octal())
+                    .map_err(|err| git_error("rendering diff header", err))?;
+                writeln!(&mut output, "new mode {}", current.mode.as_octal())
+                    .map_err(|err| git_error("rendering diff header", err))?;
+                writeln!(
+                    &mut output,
+                    "index {}..{}",
+                    baseline.blob.short(),
+                    current.blob.short()
+                )
+                .map_err(|err| git_error("rendering diff header", err))?;
+            }
+            Some(baseline) => {
+                writeln!(
+                    &mut output,
+                    "index {}..{} {}",
+                    baseline.blob.short(),
+                    current.blob.short(),
+                    current.mode.as_octal()
+                )
+                .map_err(|err| git_error("rendering diff header", err))?;
+            }
+            None => {
+                writeln!(&mut output, "new file mode {}", current.mode.as_octal())
+                    .map_err(|err| git_error("rendering diff header", err))?;
+                writeln!(
+                    &mut output,
+                    "index {}..{}",
+                    zero_oid(self.repo.object_hash()),
+                    current.blob.short()
+                )
+                .map_err(|err| git_error("rendering diff header", err))?;
+            }
+        }
+        Ok(output)
+    }
+
+    fn lookup_file_in_tree(
         tree: &gix::Tree<'_>,
         path: &RepoPath,
     ) -> Result<Option<TrackedFile>, AppError> {
@@ -295,13 +323,14 @@ impl Git {
                 if mode.is_submodule() {
                     return Err(AppError::PathIsSubmodule(path.clone()));
                 }
-                match mode.is_reviewable_file() {
-                    true => Ok(Some(TrackedFile {
+                if mode.is_reviewable_file() {
+                    Ok(Some(TrackedFile {
                         path: path.clone(),
                         blob: BlobOid::new(entry.object_id()),
                         mode,
-                    })),
-                    false => Ok(None),
+                    }))
+                } else {
+                    Ok(None)
                 }
             }
             None => Ok(None),

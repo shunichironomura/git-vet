@@ -1,17 +1,28 @@
-#![expect(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unused_self,
-    reason = "Existing integration tests use panicking helpers until test error handling is refactored"
-)]
-
 use std::env;
+use std::fmt;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+
+fn require<T, E: fmt::Display>(result: Result<T, E>, context: &str) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => fail(&format!("{context}: {error}")),
+    }
+}
+
+fn require_some<T>(option: Option<T>, context: &str) -> T {
+    option.unwrap_or_else(|| fail(context))
+}
+
+fn fail<T>(message: &str) -> T {
+    let _ = writeln!(io::stderr().lock(), "{message}");
+    std::process::abort()
+}
 
 struct TestRepo {
     dir: TestTempDir,
@@ -58,7 +69,7 @@ impl Drop for TestTempDir {
 
 impl TestRepo {
     fn new() -> Self {
-        let dir = TestTempDir::new("git-vet-test").expect("create temp dir");
+        let dir = require(TestTempDir::new("git-vet-test"), "create temp dir");
         run_git(dir.path(), ["init", "-q"]);
         run_git(dir.path(), ["config", "user.email", "reviewer@example.com"]);
         run_git(dir.path(), ["config", "user.name", "Reviewer"]);
@@ -72,9 +83,9 @@ impl TestRepo {
     fn write(&self, path: &str, contents: &str) {
         let path = self.path().join(path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create parent dir");
+            require(fs::create_dir_all(parent), "create parent dir");
         }
-        fs::write(path, contents).expect("write file");
+        require(fs::write(path, contents), "write file");
     }
 
     fn commit_all(&self, message: &str) {
@@ -83,10 +94,10 @@ impl TestRepo {
     }
 
     fn run_vet(&self, args: &[&str]) -> Output {
-        self.run_vet_in(self.path(), args)
+        Self::run_vet_in(self.path(), args)
     }
 
-    fn run_vet_in(&self, cwd: &Path, args: &[&str]) -> Output {
+    fn run_vet_in(cwd: &Path, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_git-vet"))
             .current_dir(cwd)
             .args(args)
@@ -94,7 +105,7 @@ impl TestRepo {
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_PREFIX")
             .output()
-            .expect("run git-vet")
+            .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")))
     }
 }
 
@@ -110,7 +121,7 @@ fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Output {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_PREFIX")
         .output()
-        .expect("run git")
+        .unwrap_or_else(|error| fail(&format!("run git: {error}")))
 }
 
 fn assert_git_success(output: Output) -> Output {
@@ -142,11 +153,12 @@ fn status_json_with_args(repo: &TestRepo, args: &[&str]) -> Vec<Value> {
         "status --json failed: {}",
         stderr(&output)
     );
-    let document: Value = serde_json::from_slice(&output.stdout).expect("status JSON");
-    document["files"]
-        .as_array()
-        .unwrap_or_else(|| panic!("missing files array in status JSON: {document:#?}"))
-        .clone()
+    let document: Value = require(serde_json::from_slice(&output.stdout), "status JSON");
+    require_some(
+        document["files"].as_array(),
+        &format!("missing files array in status JSON: {document:#?}"),
+    )
+    .clone()
 }
 
 fn status_json_document(repo: &TestRepo, args: &[&str]) -> Value {
@@ -156,14 +168,14 @@ fn status_json_document(repo: &TestRepo, args: &[&str]) -> Value {
         "status --json failed: {}",
         stderr(&output)
     );
-    serde_json::from_slice(&output.stdout).expect("status JSON")
+    require(serde_json::from_slice(&output.stdout), "status JSON")
 }
 
 fn record_for<'a>(records: &'a [Value], path: &str) -> &'a Value {
     records
         .iter()
         .find(|record| record["path"] == path)
-        .unwrap_or_else(|| panic!("missing record for {path}: {records:#?}"))
+        .unwrap_or_else(|| fail(&format!("missing record for {path}: {records:#?}")))
 }
 
 #[test]
@@ -173,7 +185,7 @@ fn empty_notes_ref_means_tracked_files_are_new() {
     repo.commit_all("initial");
 
     let document = status_json_document(&repo, &["status", "--json"]);
-    let records = document["files"].as_array().expect("files array");
+    let records = require_some(document["files"].as_array(), "files array");
 
     assert_eq!(document["channel"], "default");
     let record = record_for(records, "a.txt");
@@ -276,7 +288,7 @@ fn review_channels_are_independent() {
     let security_document =
         status_json_document(&repo, &["status", "--json", "--channel", "security"]);
     assert_eq!(security_document["channel"], "security");
-    let security_records = security_document["files"].as_array().expect("files array");
+    let security_records = require_some(security_document["files"].as_array(), "files array");
     let security_record = record_for(security_records, "a.txt");
     assert_eq!(security_record["state"], "new");
 
@@ -470,12 +482,14 @@ fn git_dispatch_finds_git_vet_on_path() {
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_git-vet"));
-    let binary_dir = binary.parent().expect("binary parent");
+    let binary_dir = require_some(binary.parent(), "binary parent");
     let path = env::join_paths(
-        std::iter::once(binary_dir.to_path_buf())
-            .chain(env::split_paths(&env::var_os("PATH").expect("PATH is set"))),
+        std::iter::once(binary_dir.to_path_buf()).chain(env::split_paths(&require_some(
+            env::var_os("PATH"),
+            "PATH is set",
+        ))),
     )
-    .expect("join PATH");
+    .unwrap_or_else(|error| fail(&format!("join PATH: {error}")));
 
     let output = Command::new("git")
         .current_dir(repo.path())
@@ -485,7 +499,7 @@ fn git_dispatch_finds_git_vet_on_path() {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_PREFIX")
         .output()
-        .expect("run git vet");
+        .unwrap_or_else(|error| fail(&format!("run git vet: {error}")));
 
     assert_eq!(output.status.code(), Some(1));
     assert!(stdout(&output).contains("a.txt"));
@@ -497,7 +511,7 @@ fn relative_paths_are_resolved_from_subdirectories() {
     repo.write("nested/file.txt", "hello\n");
     repo.commit_all("initial");
 
-    let mark = repo.run_vet_in(&repo.path().join("nested"), &["mark", "file.txt"]);
+    let mark = TestRepo::run_vet_in(&repo.path().join("nested"), &["mark", "file.txt"]);
     assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
 
     let records = status_json(&repo);

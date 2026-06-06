@@ -54,7 +54,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
 
     match cli.command {
         CommandKind::Mark { paths } => {
-            mark_paths(&git, &notes, paths)?;
+            mark_paths(&git, &notes, &paths)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Status { json, check } => {
@@ -64,7 +64,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             }
         }
         CommandKind::Diff { path } => {
-            diff_path(&git, &notes, path)?;
+            diff_path(&git, &notes, &path)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Prune => {

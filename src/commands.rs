@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
 
@@ -8,26 +9,22 @@ use crate::git::Git;
 use crate::git_types::{HistoricalBlob, TrackedFile};
 use crate::notes::NotesStore;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
-use crate::status_output::{print_human_status, print_json_status};
+use crate::status_output::{human_status, json_status};
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StatusMode {
+pub struct StatusMode {
     pub(crate) json: bool,
     pub(crate) check: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Gate {
+pub enum Gate {
     Open,
     Closed,
 }
 
-pub(crate) fn mark_paths(
-    git: &Git,
-    notes: &impl NotesStore,
-    paths: Vec<PathBuf>,
-) -> Result<(), AppError> {
+pub fn mark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Result<(), AppError> {
     let paths = paths
         .iter()
         .map(|path| git.normalize_user_path(path))
@@ -49,12 +46,11 @@ pub(crate) fn mark_paths(
         };
         let body = append_record(notes.note_body(&file.blob)?.as_deref(), &record);
         notes.write_note_body(&file.blob, &body)?;
-        println!("marked {}", file.path);
-        Ok(())
+        stdout_line(format_args!("marked {}", file.path))
     })
 }
 
-pub(crate) fn status(
+pub fn status(
     git: &Git,
     notes: &impl NotesStore,
     channel: &ReviewChannel,
@@ -68,21 +64,22 @@ pub(crate) fn status(
         .collect::<Vec<_>>();
     let reviewed = notes.list_reviewed()?;
 
-    match mode.check {
-        true => check_status(&tracked, &reviewed),
-        false => {
-            let mut classified = tracked
-                .iter()
-                .map(|file| classify_path(git, file, &reviewed))
-                .collect::<Result<Vec<_>, _>>()?;
-            classified.sort_by(|left, right| left.path.cmp(&right.path));
+    if mode.check {
+        check_status(&tracked, &reviewed)
+    } else {
+        let mut classified = tracked
+            .iter()
+            .map(|file| classify_path(git, file, &reviewed))
+            .collect::<Result<Vec<_>, _>>()?;
+        classified.sort_by(|left, right| left.path.cmp(&right.path));
 
-            match mode.json {
-                true => print_json_status(channel, &classified)?,
-                false => print_human_status(channel, &classified),
-            }
-            Ok(Gate::Open)
-        }
+        let output = if mode.json {
+            json_status(channel, &classified)?
+        } else {
+            human_status(channel, &classified)
+        };
+        stdout_str(&output)?;
+        Ok(Gate::Open)
     }
 }
 
@@ -92,30 +89,25 @@ fn check_status(tracked: &[TrackedFile], reviewed: &ReviewedSet) -> Result<Gate,
         .filter(|file| !reviewed.contains(&file.blob))
         .collect::<Vec<_>>();
 
-    match unreviewed.is_empty() {
-        true => Ok(Gate::Open),
-        false => {
-            unreviewed.iter().for_each(|file| println!("{}", file.path));
-            Ok(Gate::Closed)
+    if unreviewed.is_empty() {
+        Ok(Gate::Open)
+    } else {
+        for file in unreviewed {
+            stdout_line(format_args!("{}", file.path))?;
         }
+        Ok(Gate::Closed)
     }
 }
 
-pub(crate) fn diff_path(git: &Git, notes: &impl NotesStore, path: PathBuf) -> Result<(), AppError> {
-    let path = git.normalize_user_path(&path)?;
+pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), AppError> {
+    let path = git.normalize_user_path(path)?;
     let file = git.blob_at_head(&path)?;
     let reviewed = notes.list_reviewed()?;
     let classified = classify_path(git, &file, &reviewed)?;
 
     match classified.state {
-        ReviewState::Vetted => {
-            println!("{path} is up to date");
-            Ok(())
-        }
-        ReviewState::New => {
-            print!("{}", git.diff_empty_to_head(&file)?);
-            Ok(())
-        }
+        ReviewState::Vetted => stdout_line(format_args!("{path} is up to date")),
+        ReviewState::New => stdout_str(&git.diff_empty_to_head(&file)?),
         ReviewState::Stale {
             baseline,
             baseline_mode,
@@ -124,10 +116,21 @@ pub(crate) fn diff_path(git: &Git, notes: &impl NotesStore, path: PathBuf) -> Re
                 blob: baseline,
                 mode: baseline_mode,
             };
-            print!("{}", git.diff_blobs_with_path_label(&baseline, &file)?);
-            Ok(())
+            stdout_str(&git.diff_blobs_with_path_label(&baseline, &file)?)
         }
     }
+}
+
+fn stdout_line(args: std::fmt::Arguments<'_>) -> Result<(), AppError> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+fn stdout_str(output: &str) -> Result<(), AppError> {
+    io::stdout().lock().write_all(output.as_bytes())?;
+    Ok(())
 }
 
 fn classify_path(
@@ -135,33 +138,30 @@ fn classify_path(
     file: &TrackedFile,
     reviewed: &ReviewedSet,
 ) -> Result<ClassifiedFile, AppError> {
-    match reviewed.contains(&file.blob) {
-        true => Ok(ClassifiedFile {
+    if reviewed.contains(&file.blob) {
+        Ok(ClassifiedFile {
             path: file.path.clone(),
             state: ReviewState::Vetted,
             blob: file.blob,
             metadata: reviewed.metadata(&file.blob),
-        }),
-        false => {
-            let baseline = git
-                .historical_blobs(&file.path, &file.blob)?
-                .into_iter()
-                .find(|entry| reviewed.contains(&entry.blob));
-            let metadata = baseline
-                .as_ref()
-                .and_then(|entry| reviewed.metadata(&entry.blob));
-            let state = baseline
-                .map(|baseline| ReviewState::Stale {
-                    baseline: baseline.blob,
-                    baseline_mode: baseline.mode,
-                })
-                .unwrap_or(ReviewState::New);
-            Ok(ClassifiedFile {
-                path: file.path.clone(),
-                state,
-                blob: file.blob,
-                metadata,
-            })
-        }
+        })
+    } else {
+        let baseline = git
+            .historical_blobs(&file.path, &file.blob)?
+            .into_iter()
+            .find(|entry| reviewed.contains(&entry.blob));
+        let metadata = baseline
+            .as_ref()
+            .and_then(|entry| reviewed.metadata(&entry.blob));
+        let state = baseline.map_or(ReviewState::New, |baseline| ReviewState::Stale {
+            baseline: baseline.blob,
+            baseline_mode: baseline.mode,
+        });
+        Ok(ClassifiedFile {
+            path: file.path.clone(),
+            state,
+            blob: file.blob,
+            metadata,
+        })
     }
 }

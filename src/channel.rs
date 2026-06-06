@@ -5,24 +5,17 @@ use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 const NOTES_REF_PREFIX: &str = "refs/notes/vet";
-pub(crate) const DEFAULT_REVIEW_CHANNEL: &str = "default";
+pub const DEFAULT_REVIEW_CHANNEL: &str = "default";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewChannel {
+pub struct ReviewChannel {
     name: String,
     notes_ref: NotesRef,
 }
 
 impl ReviewChannel {
-    pub(crate) fn notes_ref(&self) -> &NotesRef {
+    pub(crate) const fn notes_ref(&self) -> &NotesRef {
         &self.notes_ref
-    }
-}
-
-impl Default for ReviewChannel {
-    fn default() -> Self {
-        Self::from_str(DEFAULT_REVIEW_CHANNEL)
-            .expect("the built-in default review channel must be a valid notes ref")
     }
 }
 
@@ -66,7 +59,7 @@ impl fmt::Display for ReviewChannel {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NotesRef {
+pub struct NotesRef {
     name: String,
     full_name: gix::refs::FullName,
 }
@@ -95,7 +88,7 @@ impl fmt::Display for NotesRef {
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[error("invalid review channel {channel:?}: {details}")]
-pub(crate) struct ChannelError {
+pub struct ChannelError {
     pub(crate) channel: String,
     pub(crate) details: String,
 }
