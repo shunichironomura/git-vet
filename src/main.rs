@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stderr,
+    reason = "Existing CLI error reporting uses eprintln until output handling is refactored"
+)]
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
