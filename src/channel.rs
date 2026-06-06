@@ -1,5 +1,4 @@
 use std::fmt;
-use std::str::FromStr;
 
 use serde::{Serialize, Serializer};
 use thiserror::Error;
@@ -19,10 +18,14 @@ impl ReviewChannel {
     }
 }
 
-impl FromStr for ReviewChannel {
-    type Err = ChannelError;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewChannelCandidate {
+    name: String,
+    notes_ref_name: String,
+}
 
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
+impl ReviewChannelCandidate {
+    pub(crate) fn new(input: &str) -> Result<Self, ChannelError> {
         if input.is_empty() {
             return Err(ChannelError {
                 channel: input.to_owned(),
@@ -30,16 +33,32 @@ impl FromStr for ReviewChannel {
             });
         }
 
-        let ref_name = format!("{NOTES_REF_PREFIX}/{input}");
-        let notes_ref = NotesRef::new(ref_name).map_err(|details| ChannelError {
-            channel: input.to_owned(),
-            details,
-        })?;
-
         Ok(Self {
             name: input.to_owned(),
-            notes_ref,
+            notes_ref_name: format!("{NOTES_REF_PREFIX}/{input}"),
         })
+    }
+
+    pub(crate) fn notes_ref_name(&self) -> &str {
+        &self.notes_ref_name
+    }
+
+    /// Convert only after the caller has validated `notes_ref_name()` with
+    /// `git check-ref-format` without normalization.
+    pub(crate) fn into_channel_after_git_check_ref_format(self) -> ReviewChannel {
+        ReviewChannel {
+            name: self.name,
+            notes_ref: NotesRef {
+                name: self.notes_ref_name,
+            },
+        }
+    }
+
+    pub(crate) fn channel_error(&self, details: String) -> ChannelError {
+        ChannelError {
+            channel: self.name.clone(),
+            details,
+        }
     }
 }
 
@@ -61,13 +80,6 @@ impl fmt::Display for ReviewChannel {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotesRef {
     name: String,
-}
-
-impl NotesRef {
-    fn new(name: String) -> Result<Self, String> {
-        gix::refs::FullName::try_from(name.clone()).map_err(|error| error.to_string())?;
-        Ok(Self { name })
-    }
 }
 
 impl fmt::Display for NotesRef {

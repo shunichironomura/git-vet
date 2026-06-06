@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
 
-use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel};
+use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
 use crate::commands::{Gate, StatusMode, diff_path, mark_paths, status};
 use crate::error::AppError;
 use crate::git::Git;
+use crate::git_ref_format::{CheckRefFormatError, check_ref_format};
 use crate::notes::{GitNotesStore, NotesStore};
 
 #[derive(Parser, Debug)]
@@ -48,7 +48,7 @@ enum CommandKind {
 
 pub fn run_cli() -> Result<ExitCode, AppError> {
     let cli = Cli::parse();
-    let channel = ReviewChannel::from_str(&cli.channel)?;
+    let channel = review_channel_from_cli(&cli.channel)?;
     let git = Git::discover()?;
     let notes = GitNotesStore::new(&git, channel.notes_ref().clone());
 
@@ -71,5 +71,22 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             notes.prune()?;
             Ok(ExitCode::SUCCESS)
         }
+    }
+}
+
+fn review_channel_from_cli(input: &str) -> Result<ReviewChannel, AppError> {
+    let candidate = ReviewChannelCandidate::new(input)?;
+
+    // Channel validity is exact Git refname validity for the concrete notes ref
+    // git-vet will use: refs/notes/vet/<channel>. Keep the Git subprocess at
+    // the CLI boundary instead of making ReviewChannel construction impure.
+    match check_ref_format(candidate.notes_ref_name()) {
+        Ok(()) => Ok(candidate.into_channel_after_git_check_ref_format()),
+        Err(CheckRefFormatError::Rejected { ref_name, details }) => Err(candidate
+            .channel_error(format!(
+                "`git check-ref-format` rejected {ref_name:?}: {details}"
+            ))
+            .into()),
+        Err(CheckRefFormatError::Io(error)) => Err(AppError::Io(error)),
     }
 }
