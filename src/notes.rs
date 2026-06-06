@@ -1,7 +1,6 @@
-use std::io::{self, Write};
-
-use gix::bstr::ByteSlice;
-use gix::objs::tree::EntryKind;
+use std::ffi::OsStr;
+use std::io::Write;
+use std::process::{Command, Output, Stdio};
 
 use crate::channel::NotesRef;
 use crate::error::{AppError, git_error};
@@ -19,187 +18,112 @@ pub trait NotesStore {
     fn prune(&self) -> Result<(), AppError>;
 }
 
-#[derive(Clone, Debug)]
-struct NoteEntry {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NoteListEntry {
     annotated: BlobOid,
-    note_blob: gix::ObjectId,
-    path: String,
 }
 
 #[derive(Clone)]
-pub struct GixNotesStore<'git> {
+pub struct GitNotesStore<'git> {
     git: &'git Git,
     notes_ref: NotesRef,
 }
 
-impl<'git> GixNotesStore<'git> {
+impl<'git> GitNotesStore<'git> {
     pub(crate) const fn new(git: &'git Git, notes_ref: NotesRef) -> Self {
         Self { git, notes_ref }
     }
 
     fn configure_merge_strategy(&self) -> Result<(), AppError> {
-        let config_path = self.git.repo.common_dir().join("config");
-        let mut config = if config_path.exists() {
-            gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
-                .map_err(|err| git_error("reading repository config", err))?
-        } else {
-            gix_config::File::default()
-        };
-        config
-            .set_raw_value(NOTES_MERGE_STRATEGY_KEY, NOTES_MERGE_STRATEGY)
-            .map_err(|err| git_error("updating repository config", err))?;
-        std::fs::write(config_path, config.to_bstring())?;
+        self.git_output(
+            "configuring notes merge strategy",
+            [
+                "config",
+                "set",
+                "--local",
+                "--all",
+                NOTES_MERGE_STRATEGY_KEY,
+                NOTES_MERGE_STRATEGY,
+            ],
+        )?;
         Ok(())
     }
 
-    fn note_entries(&self) -> Result<Vec<NoteEntry>, AppError> {
-        let Some(tree) = self.notes_tree()? else {
-            return Ok(Vec::new());
-        };
-        tree.traverse()
-            .breadthfirst
-            .files()
-            .map_err(|err| git_error("walking notes tree", err))?
-            .into_iter()
-            .filter(|entry| entry.mode.is_blob())
-            .filter_map(|entry| self.note_entry_from_tree_record(&entry).transpose())
-            .collect()
+    fn note_entries(&self) -> Result<Vec<NoteListEntry>, AppError> {
+        let ref_arg = self.notes_ref_arg();
+        let stdout = self.git_output("listing git notes", ["notes", ref_arg.as_str(), "list"])?;
+        let output =
+            String::from_utf8(stdout).map_err(|err| git_error("decoding notes list", err))?;
+        output.lines().map(parse_note_list_entry).collect()
     }
 
-    fn note_entry_from_tree_record(
+    fn show_note_body(&self, oid: &BlobOid) -> Result<String, AppError> {
+        let ref_arg = self.notes_ref_arg();
+        let oid_arg = oid.to_string();
+        let stdout = self.git_output(
+            "showing git note",
+            ["notes", ref_arg.as_str(), "show", oid_arg.as_str()],
+        )?;
+        String::from_utf8(stdout).map_err(|err| git_error("decoding note body", err))
+    }
+
+    fn notes_ref_arg(&self) -> String {
+        format!("--ref={}", self.notes_ref)
+    }
+
+    fn git_command(&self) -> Command {
+        let mut command = Command::new("git");
+        command
+            .current_dir(&self.git.root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_PREFIX");
+        command
+    }
+
+    fn git_output<I, S>(&self, operation: &'static str, args: I) -> Result<Vec<u8>, AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = self.git_command().args(args).output()?;
+        stdout_from_success(operation, output)
+    }
+
+    fn git_output_with_stdin<I, S>(
         &self,
-        entry: &gix::traverse::tree::recorder::Entry,
-    ) -> Result<Option<NoteEntry>, AppError> {
-        let note_path = entry
-            .filepath
-            .to_str()
-            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
-            .to_owned();
-        let hex = note_path.replace('/', "");
-        if hex.len() != self.git.repo.object_hash().len_in_hex() {
-            return Ok(None);
-        }
-        let annotated = match gix::ObjectId::from_hex(hex.as_bytes()) {
-            Ok(oid) => BlobOid::new(oid),
-            Err(_) => return Ok(None),
-        };
-        Ok(Some(NoteEntry {
-            annotated,
-            note_blob: entry.oid,
-            path: note_path,
-        }))
-    }
-
-    fn note_entry(&self, oid: &BlobOid) -> Result<Option<NoteEntry>, AppError> {
-        self.note_entries()
-            .map(|entries| entries.into_iter().find(|entry| entry.annotated == *oid))
-    }
-
-    fn note_path(&self, oid: &BlobOid) -> Result<String, AppError> {
-        self.note_entry(oid)
-            .map(|entry| entry.map(|entry| entry.path))
-            .map(|path| path.unwrap_or_else(|| oid.to_string()))
-    }
-
-    fn notes_tree(&self) -> Result<Option<gix::Tree<'_>>, AppError> {
-        let reference = self
-            .git
-            .repo
-            .try_find_reference(self.notes_ref.as_str())
-            .map_err(|err| git_error("finding notes ref", err))?;
-        reference.map_or_else(
-            || Ok(None),
-            |mut reference| {
-                reference
-                    .peel_to_tree()
-                    .map(Some)
-                    .map_err(|err| git_error("reading notes tree", err))
-            },
-        )
-    }
-
-    fn notes_tree_id(&self) -> Result<Option<gix::ObjectId>, AppError> {
-        self.notes_tree()
-            .map(|tree| tree.map(|tree| tree.id().detach()))
-    }
-
-    fn notes_parent_commit(&self) -> Result<Option<gix::ObjectId>, AppError> {
-        let Some(mut reference) = self
-            .git
-            .repo
-            .try_find_reference(self.notes_ref.as_str())
-            .map_err(|err| git_error("finding notes ref", err))?
-        else {
-            return Ok(None);
-        };
-        let target = reference
-            .follow_to_object()
-            .map_err(|err| git_error("resolving notes ref", err))?
-            .detach();
-        let object = self
-            .git
-            .repo
-            .find_object(target)
-            .map_err(|err| git_error("reading notes ref target", err))?;
-        match object.kind {
-            gix::objs::Kind::Commit => Ok(Some(target)),
-            gix::objs::Kind::Tree => Err(AppError::InvalidNotesRefTarget { actual: "tree" }),
-            gix::objs::Kind::Blob => Err(AppError::InvalidNotesRefTarget { actual: "blob" }),
-            gix::objs::Kind::Tag => Err(AppError::InvalidNotesRefTarget { actual: "tag" }),
-        }
-    }
-
-    fn commit_notes_tree(&self, tree_id: gix::ObjectId) -> Result<(), AppError> {
-        let parent = self.notes_parent_commit()?;
-        let parents = parent.into_iter().collect::<Vec<_>>();
-        self.git
-            .repo
-            .commit(
-                self.notes_ref.full_name(),
-                "git-vet notes",
-                tree_id,
-                parents,
-            )
-            .map(|_| ())
-            .map_err(|err| git_error("committing notes tree", err))
-    }
-
-    fn rewrite_notes_tree(
-        &self,
-        edit: impl FnOnce(&mut gix::object::tree::Editor<'_>) -> Result<(), AppError>,
-    ) -> Result<(), AppError> {
-        let base_tree = self
-            .notes_tree_id()?
-            .unwrap_or_else(|| gix::ObjectId::empty_tree(self.git.repo.object_hash()));
-        let mut editor = self
-            .git
-            .repo
-            .edit_tree(base_tree)
-            .map_err(|err| git_error("editing notes tree", err))?;
-        edit(&mut editor)?;
-        let new_tree = editor
-            .write()
-            .map_err(|err| git_error("writing notes tree", err))?
-            .detach();
-        if new_tree != base_tree {
-            self.commit_notes_tree(new_tree)?;
-        }
-        Ok(())
+        operation: &'static str,
+        args: I,
+        stdin: &str,
+    ) -> Result<Vec<u8>, AppError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut child = self
+            .git_command()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| git_error(operation, "git stdin was not available"))?;
+        child_stdin.write_all(stdin.as_bytes())?;
+        drop(child_stdin);
+        let output = child.wait_with_output()?;
+        stdout_from_success(operation, output)
     }
 }
 
-impl NotesStore for GixNotesStore<'_> {
+impl NotesStore for GitNotesStore<'_> {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError> {
         self.note_entries()?
             .into_iter()
             .try_fold(ReviewedSet::default(), |mut reviewed, entry| {
-                let mut body = self
-                    .git
-                    .repo
-                    .find_blob(entry.note_blob)
-                    .map_err(|err| git_error("reading note body", err))?;
-                let body = String::from_utf8(body.take_data())
-                    .map_err(|err| AppError::NonUtf8Path(err.to_string()))?;
+                let body = self.show_note_body(&entry.annotated)?;
                 let records = parse_note_records(&body);
                 reviewed
                     .by_blob
@@ -209,54 +133,89 @@ impl NotesStore for GixNotesStore<'_> {
     }
 
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError> {
-        let Some(entry) = self.note_entry(oid)? else {
-            return Ok(None);
-        };
-        let mut body = self
-            .git
-            .repo
-            .find_blob(entry.note_blob)
-            .map_err(|err| git_error("reading note body", err))?;
-        String::from_utf8(body.take_data())
-            .map(Some)
-            .map_err(|err| AppError::NonUtf8Path(err.to_string()))
+        if self
+            .note_entries()?
+            .into_iter()
+            .any(|entry| entry.annotated == *oid)
+        {
+            self.show_note_body(oid).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError> {
         self.configure_merge_strategy()?;
-        let note_path = self.note_path(oid)?;
-        let note_blob = self
-            .git
-            .repo
-            .write_blob(body.as_bytes())
-            .map_err(|err| git_error("writing note blob", err))?
-            .detach();
-        self.rewrite_notes_tree(|editor| {
-            editor
-                .upsert(&note_path, EntryKind::Blob, note_blob)
-                .map_err(|err| git_error("updating note entry", err))?;
-            Ok(())
-        })
+        let ref_arg = self.notes_ref_arg();
+        let oid_arg = oid.to_string();
+        self.git_output_with_stdin(
+            "writing git note",
+            [
+                "notes",
+                ref_arg.as_str(),
+                "add",
+                "-f",
+                "--no-stripspace",
+                "-F",
+                "-",
+                oid_arg.as_str(),
+            ],
+            body,
+        )?;
+        Ok(())
     }
 
     fn prune(&self) -> Result<(), AppError> {
-        let entries = self.note_entries()?;
-        let stale_paths = entries
-            .into_iter()
-            .filter(|entry| !self.git.repo.has_object(entry.annotated.as_object_id()))
-            .map(|entry| entry.path)
-            .collect::<Vec<_>>();
-        if stale_paths.is_empty() {
-            return Ok(());
-        }
-        self.rewrite_notes_tree(|editor| {
-            stale_paths.iter().try_for_each(|path| {
-                editor
-                    .remove(path)
-                    .map_err(|err| git_error("removing stale note", err))?;
-                writeln!(io::stdout().lock(), "Removing note for object {path}")?;
-                Ok(())
+        let ref_arg = self.notes_ref_arg();
+        self.git_output("pruning git notes", ["notes", ref_arg.as_str(), "prune"])?;
+        Ok(())
+    }
+}
+
+fn parse_note_list_entry(line: &str) -> Result<NoteListEntry, AppError> {
+    let mut fields = line.split_whitespace();
+    match (fields.next(), fields.next(), fields.next()) {
+        (Some(note_oid), Some(annotated), None) => {
+            parse_object_id("parsing notes list note object id", note_oid)?;
+            parse_object_id("parsing notes list annotated object id", annotated).map(|annotated| {
+                NoteListEntry {
+                    annotated: BlobOid::new(annotated),
+                }
             })
-        })
+        }
+        (None, _, _) => Err(git_error(
+            "parsing notes list",
+            format!("missing note object id in {line:?}"),
+        )),
+        (Some(_), None, _) => Err(git_error(
+            "parsing notes list",
+            format!("missing annotated object id in {line:?}"),
+        )),
+        (Some(_), Some(_), Some(_)) => Err(git_error(
+            "parsing notes list",
+            format!("unexpected extra fields in {line:?}"),
+        )),
+    }
+}
+
+fn parse_object_id(operation: &'static str, oid: &str) -> Result<gix::ObjectId, AppError> {
+    gix::ObjectId::from_hex(oid.as_bytes()).map_err(|err| git_error(operation, err))
+}
+
+fn stdout_from_success(operation: &'static str, output: Output) -> Result<Vec<u8>, AppError> {
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(git_error(operation, command_failure_details(&output)))
+    }
+}
+
+fn command_failure_details(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        output.status.to_string()
+    } else {
+        format!("{}: {stderr}", output.status)
     }
 }

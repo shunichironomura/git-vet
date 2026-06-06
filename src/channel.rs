@@ -61,22 +61,12 @@ impl fmt::Display for ReviewChannel {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotesRef {
     name: String,
-    full_name: gix::refs::FullName,
 }
 
 impl NotesRef {
     fn new(name: String) -> Result<Self, String> {
-        let full_name =
-            gix::refs::FullName::try_from(name.clone()).map_err(|error| error.to_string())?;
-        Ok(Self { name, full_name })
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.name
-    }
-
-    pub(crate) fn full_name(&self) -> gix::refs::FullName {
-        self.full_name.clone()
+        gix::refs::FullName::try_from(name.clone()).map_err(|error| error.to_string())?;
+        Ok(Self { name })
     }
 }
 

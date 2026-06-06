@@ -8,7 +8,7 @@ use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel};
 use crate::commands::{Gate, StatusMode, diff_path, mark_paths, status};
 use crate::error::AppError;
 use crate::git::Git;
-use crate::notes::{GixNotesStore, NotesStore};
+use crate::notes::{GitNotesStore, NotesStore};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -50,7 +50,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
     let cli = Cli::parse();
     let channel = ReviewChannel::from_str(&cli.channel)?;
     let git = Git::discover()?;
-    let notes = GixNotesStore::new(&git, channel.notes_ref().clone());
+    let notes = GitNotesStore::new(&git, channel.notes_ref().clone());
 
     match cli.command {
         CommandKind::Mark { paths } => {

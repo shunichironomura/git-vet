@@ -399,7 +399,6 @@ dependencies = [
  "chrono",
  "clap",
  "gix",
- "gix-config",
  "ignore",
  "serde",
  "serde_json",
