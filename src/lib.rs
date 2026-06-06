@@ -1,20 +1,23 @@
 use std::collections::HashMap;
 use std::env;
-use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::ExitCode;
 
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
+use gix::bstr::ByteSlice;
+use gix::diff::blob::platform::prepare_diff::Operation;
+use gix::diff::blob::unified_diff::{ConsumeBinaryHunk, ContextSize};
+use gix::diff::blob::{ResourceKind, UnifiedDiff};
+use gix::objs::tree::{EntryKind, EntryMode};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use thiserror::Error;
 
-const NOTES_REF: &str = "vet";
-const ZERO_OID_PREFIX: char = '0';
+const NOTES_REF: &str = "refs/notes/vet";
+const NOTES_MERGE_STRATEGY_KEY: &str = "notes.mergeStrategy";
+const NOTES_MERGE_STRATEGY: &str = "cat_sort_uniq";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -52,7 +55,7 @@ enum CommandKind {
 pub fn run_cli() -> Result<ExitCode, AppError> {
     let cli = Cli::parse();
     let git = Git::discover()?;
-    let notes = GitNotesStore::new(git.clone());
+    let notes = GixNotesStore::new(&git);
 
     match cli.command {
         CommandKind::Mark { paths } => {
@@ -78,14 +81,13 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("git command failed (exit {code:?}): git {args}\n{stderr}")]
-    GitCommand {
-        args: String,
-        code: Option<i32>,
-        stderr: String,
+    #[error("git operation failed while {operation}: {details}")]
+    Git {
+        operation: &'static str,
+        details: String,
     },
-    #[error("failed to run git: {0}")]
-    GitIo(#[source] std::io::Error),
+    #[error("repository has no worktree")]
+    MissingWorktree,
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(String),
     #[error("path escapes the repository root: {0}")]
@@ -100,10 +102,19 @@ pub enum AppError {
     Vetignore(String),
     #[error("missing git config user.email")]
     MissingUserEmail,
+    #[error("notes ref points to a {actual}; expected a commit")]
+    InvalidNotesRefTarget { actual: &'static str },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+fn git_error(operation: &'static str, source: impl fmt::Display) -> AppError {
+    AppError::Git {
+        operation,
+        details: source.to_string(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize)]
@@ -118,8 +129,8 @@ impl RepoPath {
         Ok(Self(path.to_owned()))
     }
 
-    fn as_str(&self) -> &str {
-        &self.0
+    fn as_bstr(&self) -> &gix::bstr::BStr {
+        self.0.as_bytes().as_bstr()
     }
 
     fn to_path_buf(&self) -> PathBuf {
@@ -133,42 +144,75 @@ impl fmt::Display for RepoPath {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize)]
-#[serde(transparent)]
-pub struct BlobOid(String);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct BlobOid(gix::ObjectId);
 
 impl BlobOid {
-    fn new(oid: impl Into<String>) -> Self {
-        Self(oid.into())
+    fn new(oid: gix::ObjectId) -> Self {
+        Self(oid)
     }
 
-    fn as_str(&self) -> &str {
-        &self.0
+    fn as_object_id(&self) -> gix::ObjectId {
+        self.0
     }
 
-    fn is_all_zero(&self) -> bool {
-        self.0.chars().all(|ch| ch == ZERO_OID_PREFIX)
+    fn short(&self) -> String {
+        self.0.to_hex_with_len(12).to_string()
+    }
+}
+
+impl Serialize for BlobOid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
 impl fmt::Display for BlobOid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        write!(f, "{}", self.0)
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct CommitOid(String);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+struct CommitOid(gix::ObjectId);
 
 impl CommitOid {
-    fn new(oid: impl Into<String>) -> Self {
-        Self(oid.into())
+    fn new(oid: gix::ObjectId) -> Self {
+        Self(oid)
     }
 }
 
 impl fmt::Display for CommitOid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileMode(EntryMode);
+
+impl FileMode {
+    fn new(mode: EntryMode) -> Self {
+        Self(mode)
+    }
+
+    fn kind(&self) -> EntryKind {
+        self.0.kind()
+    }
+
+    fn is_reviewable_file(&self) -> bool {
+        self.0.is_blob_or_symlink()
+    }
+
+    fn is_submodule(&self) -> bool {
+        self.0.is_commit()
+    }
+
+    fn as_octal(&self) -> String {
+        format!("{:o}", self.0)
     }
 }
 
@@ -230,7 +274,10 @@ impl ReviewedSet {
 #[derive(Clone, Debug)]
 enum ReviewState {
     Vetted,
-    Stale { baseline: BlobOid },
+    Stale {
+        baseline: BlobOid,
+        baseline_mode: FileMode,
+    },
     New,
 }
 
@@ -245,7 +292,7 @@ impl ReviewState {
 
     fn baseline(&self) -> Option<&BlobOid> {
         match self {
-            Self::Stale { baseline } => Some(baseline),
+            Self::Stale { baseline, .. } => Some(baseline),
             Self::Vetted | Self::New => None,
         }
     }
@@ -263,53 +310,36 @@ struct ClassifiedFile {
 struct TrackedFile {
     path: RepoPath,
     blob: BlobOid,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum GitObjectKind {
-    Blob,
-    Tree,
-    Commit,
-    Other(String),
-}
-
-impl GitObjectKind {
-    fn from_git(kind: &str) -> Self {
-        match kind {
-            "blob" => Self::Blob,
-            "tree" => Self::Tree,
-            "commit" => Self::Commit,
-            other => Self::Other(other.to_owned()),
-        }
-    }
+    mode: FileMode,
 }
 
 #[derive(Clone, Debug)]
-struct TreeEntry {
-    kind: GitObjectKind,
-    oid: BlobOid,
-    path: RepoPath,
+struct HistoricalBlob {
+    blob: BlobOid,
+    mode: FileMode,
 }
 
-#[derive(Clone, Debug)]
 struct Git {
+    repo: gix::Repository,
     root: PathBuf,
     prefix: PathBuf,
 }
 
 impl Git {
     fn discover() -> Result<Self, AppError> {
-        let root_stdout = run_git_from_current(["rev-parse", "--show-toplevel"])?;
-        let root = PathBuf::from(trim_stdout(&root_stdout));
+        let cwd = env::current_dir()?;
+        let repo = gix::discover_with_environment_overrides(&cwd)
+            .map_err(|err| git_error("discovering repository", err))?;
+        let root = repo
+            .workdir()
+            .ok_or(AppError::MissingWorktree)?
+            .to_path_buf();
         let prefix = match env::var_os("GIT_PREFIX") {
             Some(value) if !value.is_empty() => PathBuf::from(value),
-            _ => {
-                let prefix_stdout = run_git_from_current(["rev-parse", "--show-prefix"])?;
-                PathBuf::from(trim_stdout(&prefix_stdout))
-            }
+            _ => prefix_from_cwd(&root, &cwd)?,
         };
 
-        Ok(Self { root, prefix })
+        Ok(Self { repo, root, prefix })
     }
 
     fn normalize_user_path(&self, input: &Path) -> Result<RepoPath, AppError> {
@@ -327,46 +357,58 @@ impl Git {
     }
 
     fn tracked_files_at_head(&self) -> Result<Vec<TrackedFile>, AppError> {
-        self.ls_tree(["-rz", "--full-tree", "HEAD"])?
+        let tree = self
+            .repo
+            .head_tree()
+            .map_err(|err| git_error("reading HEAD tree", err))?;
+        let mut files = tree
+            .traverse()
+            .breadthfirst
+            .files()
+            .map_err(|err| git_error("walking HEAD tree", err))?
             .into_iter()
-            .filter_map(|entry| match entry.kind {
-                GitObjectKind::Blob => Some(Ok(TrackedFile {
-                    path: entry.path,
-                    blob: entry.oid,
-                })),
-                GitObjectKind::Commit | GitObjectKind::Tree | GitObjectKind::Other(_) => None,
+            .filter(|entry| entry.mode.is_blob_or_symlink())
+            .map(|entry| {
+                Ok(TrackedFile {
+                    path: repo_path_from_bstr(entry.filepath.as_bstr())?,
+                    blob: BlobOid::new(entry.oid),
+                    mode: FileMode::new(entry.mode),
+                })
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|mut files| {
-                files.sort_by(|left, right| left.path.cmp(&right.path));
-                files
-            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(files)
     }
 
-    fn blob_at_head(&self, path: &RepoPath) -> Result<BlobOid, AppError> {
-        let entries = self.ls_tree(["-z", "HEAD", "--", path.as_str()])?;
-        match entries.into_iter().find(|entry| entry.path == *path) {
-            Some(TreeEntry {
-                kind: GitObjectKind::Blob,
-                oid,
-                ..
-            }) => Ok(oid),
-            Some(TreeEntry {
-                kind: GitObjectKind::Commit,
-                ..
-            }) => Err(AppError::PathIsSubmodule(path.clone())),
-            Some(_) | None => Err(AppError::PathNotTracked(path.clone())),
+    fn blob_at_head(&self, path: &RepoPath) -> Result<TrackedFile, AppError> {
+        let tree = self
+            .repo
+            .head_tree()
+            .map_err(|err| git_error("reading HEAD tree", err))?;
+        match self.lookup_file_in_tree(&tree, path)? {
+            Some(file) => Ok(file),
+            None => Err(AppError::PathNotTracked(path.clone())),
         }
     }
 
     fn head_commit(&self) -> Result<CommitOid, AppError> {
-        self.run_string(["rev-parse", "HEAD"])
-            .map(|oid| CommitOid::new(oid.trim().to_owned()))
+        self.repo
+            .head_id()
+            .map(|id| CommitOid::new(id.detach()))
+            .map_err(|err| git_error("reading HEAD", err))
     }
 
     fn reviewer(&self) -> Result<String, AppError> {
-        let reviewer = self.run_string(["config", "user.email"])?;
-        let reviewer = reviewer.trim().to_owned();
+        let reviewer = self
+            .repo
+            .config_snapshot()
+            .string("user.email")
+            .ok_or(AppError::MissingUserEmail)?;
+        let reviewer = reviewer
+            .to_str()
+            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
+            .trim()
+            .to_owned();
         match reviewer.is_empty() {
             true => Err(AppError::MissingUserEmail),
             false => Ok(reviewer),
@@ -377,146 +419,226 @@ impl Git {
         &self,
         path: &RepoPath,
         current: &BlobOid,
-    ) -> Result<Vec<BlobOid>, AppError> {
-        let output = self.run_string([
-            "log",
-            "--follow",
-            "--raw",
-            "--no-abbrev",
-            "--format=format:",
-            "--",
-            path.as_str(),
-        ])?;
+    ) -> Result<Vec<HistoricalBlob>, AppError> {
+        let head = self
+            .repo
+            .head_id()
+            .map_err(|err| git_error("reading HEAD", err))?
+            .detach();
+        let commits = self
+            .repo
+            .rev_walk([head])
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+            ))
+            .all()
+            .map_err(|err| git_error("walking commit history", err))?;
+        let mut followed_path = path.clone();
+        let mut previous_blob = None;
+        let mut history = Vec::new();
 
-        Ok(output
-            .lines()
-            .filter_map(parse_raw_log_new_oid)
-            .filter(|oid| !oid.is_all_zero() && oid != current)
-            .collect())
-    }
+        for info in commits {
+            let info = info.map_err(|err| git_error("walking commit history", err))?;
+            let commit = info
+                .object()
+                .map_err(|err| git_error("reading historical commit", err))?;
+            let tree = commit
+                .tree()
+                .map_err(|err| git_error("reading historical tree", err))?;
+            if let Some(file) = self.lookup_file_in_tree(&tree, &followed_path)? {
+                if file.blob != *current && previous_blob != Some(file.blob) {
+                    history.push(HistoricalBlob {
+                        blob: file.blob,
+                        mode: file.mode,
+                    });
+                }
+                previous_blob = Some(file.blob);
+            }
 
-    fn empty_tree_oid(&self) -> Result<BlobOid, AppError> {
-        let output = self.try_run_with_stdin(["mktree"], b"")?;
-        match output.status.success() {
-            true => String::from_utf8(output.stdout)
-                .map(|oid| BlobOid::new(oid.trim().to_owned()))
-                .map_err(|err| AppError::NonUtf8Path(err.to_string())),
-            false => Err(AppError::GitCommand {
-                args: output.args,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }),
+            if let Some(parent_id) = info.parent_ids().next() {
+                let parent = parent_id
+                    .object()
+                    .map_err(|err| git_error("reading historical parent commit", err))?
+                    .into_commit();
+                let parent_tree = parent
+                    .tree()
+                    .map_err(|err| git_error("reading historical parent tree", err))?;
+                if let Some(source_path) =
+                    self.rename_source(&parent_tree, &tree, &followed_path)?
+                {
+                    followed_path = source_path;
+                }
+            }
         }
+
+        Ok(history)
     }
 
-    fn diff_empty_tree_to_head(&self, path: &RepoPath) -> Result<String, AppError> {
-        let empty_tree = self.empty_tree_oid()?;
-        self.run_string([
-            "diff",
-            "--no-ext-diff",
-            empty_tree.as_str(),
-            "HEAD",
-            "--",
-            path.as_str(),
-        ])
+    fn diff_empty_to_head(&self, file: &TrackedFile) -> Result<String, AppError> {
+        self.render_blob_diff(None, file)
     }
 
     fn diff_blobs_with_path_label(
         &self,
-        baseline: &BlobOid,
-        current: &BlobOid,
-        path: &RepoPath,
+        baseline: &HistoricalBlob,
+        current: &TrackedFile,
     ) -> Result<String, AppError> {
-        let tempdir = ScopedTempDir::new("git-vet-diff")?;
-        let baseline_path = tempdir.path().join("baseline").join(path.to_path_buf());
-        let current_path = tempdir.path().join("current").join(path.to_path_buf());
-        write_blob_file(&baseline_path, &self.cat_blob(baseline)?)?;
-        write_blob_file(&current_path, &self.cat_blob(current)?)?;
+        self.render_blob_diff(Some(baseline), current)
+    }
 
-        let output = self.try_run([
-            OsString::from("diff"),
-            OsString::from("--no-ext-diff"),
-            OsString::from("--no-index"),
-            baseline_path.as_os_str().to_owned(),
-            current_path.as_os_str().to_owned(),
-        ])?;
+    fn render_blob_diff(
+        &self,
+        baseline: Option<&HistoricalBlob>,
+        current: &TrackedFile,
+    ) -> Result<String, AppError> {
+        let old_label = baseline
+            .map(|_| format!("a/{}", current.path))
+            .unwrap_or_else(|| "/dev/null".to_owned());
+        let new_label = format!("b/{}", current.path);
+        let old_blob = baseline.map(|baseline| baseline.blob);
+        let old_mode = baseline.map(|baseline| baseline.mode);
+        let old_id = old_blob
+            .map(|oid| oid.as_object_id())
+            .unwrap_or_else(|| gix::ObjectId::null(self.repo.object_hash()));
+        let old_kind = old_mode.map(|mode| mode.kind()).unwrap_or(EntryKind::Blob);
+        let mut cache = self
+            .repo
+            .diff_resource_cache_for_tree_diff()
+            .map_err(|err| git_error("creating diff resource cache", err))?;
 
-        match output.status.code() {
-            Some(0 | 1) => String::from_utf8(output.stdout)
-                .map(|diff| relabel_no_index_diff(&diff, &baseline_path, &current_path, path))
-                .map_err(|err| AppError::NonUtf8Path(err.to_string())),
-            code => Err(AppError::GitCommand {
-                args: output.args,
-                code,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }),
+        cache
+            .set_resource(
+                old_id,
+                old_kind,
+                current.path.as_bstr(),
+                ResourceKind::OldOrSource,
+                &self.repo.objects,
+            )
+            .map_err(|err| git_error("setting diff source", err))?;
+        cache
+            .set_resource(
+                current.blob.as_object_id(),
+                current.mode.kind(),
+                current.path.as_bstr(),
+                ResourceKind::NewOrDestination,
+                &self.repo.objects,
+            )
+            .map_err(|err| git_error("setting diff destination", err))?;
+        cache.options.skip_internal_diff_if_external_is_configured = false;
+
+        let mut output = String::new();
+        output.push_str(&format!(
+            "diff --git a/{path} b/{path}\n",
+            path = current.path
+        ));
+        match baseline {
+            Some(baseline) if baseline.mode != current.mode => {
+                output.push_str(&format!("old mode {}\n", baseline.mode.as_octal()));
+                output.push_str(&format!("new mode {}\n", current.mode.as_octal()));
+                output.push_str(&format!(
+                    "index {}..{}\n",
+                    baseline.blob.short(),
+                    current.blob.short()
+                ));
+            }
+            Some(baseline) => {
+                output.push_str(&format!(
+                    "index {}..{} {}\n",
+                    baseline.blob.short(),
+                    current.blob.short(),
+                    current.mode.as_octal()
+                ));
+            }
+            None => {
+                output.push_str(&format!("new file mode {}\n", current.mode.as_octal()));
+                output.push_str(&format!(
+                    "index {}..{}\n",
+                    zero_oid(self.repo.object_hash()),
+                    current.blob.short()
+                ));
+            }
+        }
+
+        let prepared = cache
+            .prepare_diff()
+            .map_err(|err| git_error("preparing blob diff", err))?;
+        match prepared.operation {
+            Operation::InternalDiff { algorithm } => {
+                output.push_str(&format!("--- {old_label}\n+++ {new_label}\n"));
+                let input = prepared.interned_input();
+                let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
+                let hunk = UnifiedDiff::new(
+                    &diff,
+                    &input,
+                    ConsumeBinaryHunk::new(Vec::<u8>::new(), "\n"),
+                    ContextSize::default(),
+                )
+                .consume()?;
+                output.push_str(&String::from_utf8_lossy(&hunk));
+            }
+            Operation::SourceOrDestinationIsBinary => {
+                output.push_str(&format!(
+                    "Binary files {old_label} and {new_label} differ\n"
+                ));
+            }
+            Operation::ExternalCommand { .. } => unreachable!("external diffs are disabled"),
+        }
+
+        Ok(output)
+    }
+
+    fn lookup_file_in_tree(
+        &self,
+        tree: &gix::Tree<'_>,
+        path: &RepoPath,
+    ) -> Result<Option<TrackedFile>, AppError> {
+        let entry = tree
+            .lookup_entry_by_path(path.to_path_buf())
+            .map_err(|err| git_error("looking up path in tree", err))?;
+        match entry {
+            Some(entry) => {
+                let mode = FileMode::new(entry.mode());
+                if mode.is_submodule() {
+                    return Err(AppError::PathIsSubmodule(path.clone()));
+                }
+                match mode.is_reviewable_file() {
+                    true => Ok(Some(TrackedFile {
+                        path: path.clone(),
+                        blob: BlobOid::new(entry.object_id()),
+                        mode,
+                    })),
+                    false => Ok(None),
+                }
+            }
+            None => Ok(None),
         }
     }
 
-    fn cat_blob(&self, oid: &BlobOid) -> Result<Vec<u8>, AppError> {
-        self.run_bytes(["cat-file", "blob", oid.as_str()])
-    }
-
-    fn ls_tree<I, S>(&self, args: I) -> Result<Vec<TreeEntry>, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let args = std::iter::once(OsString::from("ls-tree"))
-            .chain(args.into_iter().map(|arg| arg.as_ref().to_owned()))
-            .collect::<Vec<_>>();
-        let output = self.run_bytes(args)?;
-        parse_ls_tree(&output)
-    }
-
-    fn run_string<I, S>(&self, args: I) -> Result<String, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let output = self.run_bytes(args)?;
-        String::from_utf8(output).map_err(|err| AppError::NonUtf8Path(err.to_string()))
-    }
-
-    fn run_bytes<I, S>(&self, args: I) -> Result<Vec<u8>, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let output = self.try_run(args)?;
-        match output.status.success() {
-            true => Ok(output.stdout),
-            false => Err(AppError::GitCommand {
-                args: output.args,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }),
+    fn rename_source(
+        &self,
+        old_tree: &gix::Tree<'_>,
+        new_tree: &gix::Tree<'_>,
+        destination: &RepoPath,
+    ) -> Result<Option<RepoPath>, AppError> {
+        let changes = self
+            .repo
+            .diff_tree_to_tree(Some(old_tree), Some(new_tree), None)
+            .map_err(|err| git_error("detecting renames", err))?;
+        for change in changes {
+            match change {
+                gix::diff::tree_with_rewrites::Change::Rewrite {
+                    source_location,
+                    location,
+                    copy: false,
+                    ..
+                } if repo_path_from_bstr(location.as_bstr())? == *destination => {
+                    return repo_path_from_bstr(source_location.as_bstr()).map(Some);
+                }
+                _ => {}
+            }
         }
+        Ok(None)
     }
-
-    fn try_run<I, S>(&self, args: I) -> Result<GitOutput, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_git(Some(&self.root), args, None)
-    }
-
-    fn try_run_with_stdin<I, S>(&self, args: I, stdin: &[u8]) -> Result<GitOutput, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_git(Some(&self.root), args, Some(stdin))
-    }
-}
-
-#[derive(Debug)]
-struct GitOutput {
-    args: String,
-    status: std::process::ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
 }
 
 trait NotesStore {
@@ -527,90 +649,238 @@ trait NotesStore {
 }
 
 #[derive(Clone, Debug)]
-struct GitNotesStore {
-    git: Git,
+struct NoteEntry {
+    annotated: BlobOid,
+    note_blob: gix::ObjectId,
+    path: String,
 }
 
-impl GitNotesStore {
-    fn new(git: Git) -> Self {
+#[derive(Clone)]
+struct GixNotesStore<'git> {
+    git: &'git Git,
+}
+
+impl<'git> GixNotesStore<'git> {
+    fn new(git: &'git Git) -> Self {
         Self { git }
     }
 
     fn configure_merge_strategy(&self) -> Result<(), AppError> {
+        let config_path = self.git.repo.common_dir().join("config");
+        let mut config = match config_path.exists() {
+            true => gix_config::File::from_path_no_includes(
+                config_path.clone(),
+                gix_config::Source::Local,
+            )
+            .map_err(|err| git_error("reading repository config", err))?,
+            false => gix_config::File::default(),
+        };
+        config
+            .set_raw_value(NOTES_MERGE_STRATEGY_KEY, NOTES_MERGE_STRATEGY)
+            .map_err(|err| git_error("updating repository config", err))?;
+        std::fs::write(config_path, config.to_bstring())?;
+        Ok(())
+    }
+
+    fn note_entries(&self) -> Result<Vec<NoteEntry>, AppError> {
+        let Some(tree) = self.notes_tree()? else {
+            return Ok(Vec::new());
+        };
+        tree.traverse()
+            .breadthfirst
+            .files()
+            .map_err(|err| git_error("walking notes tree", err))?
+            .into_iter()
+            .filter(|entry| entry.mode.is_blob())
+            .filter_map(|entry| self.note_entry_from_tree_record(entry).transpose())
+            .collect()
+    }
+
+    fn note_entry_from_tree_record(
+        &self,
+        entry: gix::traverse::tree::recorder::Entry,
+    ) -> Result<Option<NoteEntry>, AppError> {
+        let note_path = entry
+            .filepath
+            .to_str()
+            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
+            .to_owned();
+        let hex = note_path.replace('/', "");
+        if hex.len() != self.git.repo.object_hash().len_in_hex() {
+            return Ok(None);
+        }
+        let annotated = match gix::ObjectId::from_hex(hex.as_bytes()) {
+            Ok(oid) => BlobOid::new(oid),
+            Err(_) => return Ok(None),
+        };
+        Ok(Some(NoteEntry {
+            annotated,
+            note_blob: entry.oid,
+            path: note_path,
+        }))
+    }
+
+    fn note_entry(&self, oid: &BlobOid) -> Result<Option<NoteEntry>, AppError> {
+        self.note_entries()
+            .map(|entries| entries.into_iter().find(|entry| entry.annotated == *oid))
+    }
+
+    fn note_path(&self, oid: &BlobOid) -> Result<String, AppError> {
+        self.note_entry(oid)
+            .map(|entry| entry.map(|entry| entry.path))
+            .map(|path| path.unwrap_or_else(|| oid.to_string()))
+    }
+
+    fn notes_tree(&self) -> Result<Option<gix::Tree<'_>>, AppError> {
+        let reference = self
+            .git
+            .repo
+            .try_find_reference(NOTES_REF)
+            .map_err(|err| git_error("finding notes ref", err))?;
+        match reference {
+            Some(mut reference) => reference
+                .peel_to_tree()
+                .map(Some)
+                .map_err(|err| git_error("reading notes tree", err)),
+            None => Ok(None),
+        }
+    }
+
+    fn notes_tree_id(&self) -> Result<Option<gix::ObjectId>, AppError> {
+        self.notes_tree()
+            .map(|tree| tree.map(|tree| tree.id().detach()))
+    }
+
+    fn notes_parent_commit(&self) -> Result<Option<gix::ObjectId>, AppError> {
+        let Some(mut reference) = self
+            .git
+            .repo
+            .try_find_reference(NOTES_REF)
+            .map_err(|err| git_error("finding notes ref", err))?
+        else {
+            return Ok(None);
+        };
+        let target = reference
+            .follow_to_object()
+            .map_err(|err| git_error("resolving notes ref", err))?
+            .detach();
+        let object = self
+            .git
+            .repo
+            .find_object(target)
+            .map_err(|err| git_error("reading notes ref target", err))?;
+        match object.kind {
+            gix::objs::Kind::Commit => Ok(Some(target)),
+            gix::objs::Kind::Tree => Err(AppError::InvalidNotesRefTarget { actual: "tree" }),
+            gix::objs::Kind::Blob => Err(AppError::InvalidNotesRefTarget { actual: "blob" }),
+            gix::objs::Kind::Tag => Err(AppError::InvalidNotesRefTarget { actual: "tag" }),
+        }
+    }
+
+    fn commit_notes_tree(&self, tree_id: gix::ObjectId) -> Result<(), AppError> {
+        let parent = self.notes_parent_commit()?;
+        let parents = parent.into_iter().collect::<Vec<_>>();
         self.git
-            .run_bytes(["config", "notes.mergeStrategy", "cat_sort_uniq"])
+            .repo
+            .commit(NOTES_REF, "git-vet notes", tree_id, parents)
             .map(|_| ())
+            .map_err(|err| git_error("committing notes tree", err))
+    }
+
+    fn rewrite_notes_tree(
+        &self,
+        edit: impl FnOnce(&mut gix::object::tree::Editor<'_>) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        let base_tree = self
+            .notes_tree_id()?
+            .unwrap_or_else(|| gix::ObjectId::empty_tree(self.git.repo.object_hash()));
+        let mut editor = self
+            .git
+            .repo
+            .edit_tree(base_tree)
+            .map_err(|err| git_error("editing notes tree", err))?;
+        edit(&mut editor)?;
+        let new_tree = editor
+            .write()
+            .map_err(|err| git_error("writing notes tree", err))?
+            .detach();
+        if new_tree != base_tree {
+            self.commit_notes_tree(new_tree)?;
+        }
+        Ok(())
     }
 }
 
-impl NotesStore for GitNotesStore {
+impl NotesStore for GixNotesStore<'_> {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError> {
-        let output = self.git.run_string(["notes", "--ref", NOTES_REF, "list"])?;
-        output
-            .lines()
-            .filter_map(|line| {
-                line.split_once(' ')
-                    .map(|(_, annotated)| annotated.to_owned())
-            })
-            .try_fold(ReviewedSet::default(), |mut reviewed, oid| {
-                let blob = BlobOid::new(oid);
-                let records = self
-                    .note_body(&blob)?
-                    .map(|body| parse_note_records(&body))
-                    .unwrap_or_default();
-                reviewed.by_blob.insert(blob, ReviewInfo { records });
+        self.note_entries()?
+            .into_iter()
+            .try_fold(ReviewedSet::default(), |mut reviewed, entry| {
+                let mut body = self
+                    .git
+                    .repo
+                    .find_blob(entry.note_blob)
+                    .map_err(|err| git_error("reading note body", err))?;
+                let body = String::from_utf8(body.take_data())
+                    .map_err(|err| AppError::NonUtf8Path(err.to_string()))?;
+                let records = parse_note_records(&body);
+                reviewed
+                    .by_blob
+                    .insert(entry.annotated, ReviewInfo { records });
                 Ok(reviewed)
             })
     }
 
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError> {
-        let output = self
+        let Some(entry) = self.note_entry(oid)? else {
+            return Ok(None);
+        };
+        let mut body = self
             .git
-            .try_run(["notes", "--ref", NOTES_REF, "show", oid.as_str()])?;
-        match output.status.success() {
-            true => String::from_utf8(output.stdout)
-                .map(Some)
-                .map_err(|err| AppError::NonUtf8Path(err.to_string())),
-            false if output.status.code() == Some(1) => Ok(None),
-            false => Err(AppError::GitCommand {
-                args: output.args,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }),
-        }
+            .repo
+            .find_blob(entry.note_blob)
+            .map_err(|err| git_error("reading note body", err))?;
+        String::from_utf8(body.take_data())
+            .map(Some)
+            .map_err(|err| AppError::NonUtf8Path(err.to_string()))
     }
 
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError> {
         self.configure_merge_strategy()?;
-        let output = self.git.try_run_with_stdin(
-            [
-                "notes",
-                "--ref",
-                NOTES_REF,
-                "add",
-                "-f",
-                "-F",
-                "-",
-                oid.as_str(),
-            ],
-            body.as_bytes(),
-        )?;
-        match output.status.success() {
-            true => Ok(()),
-            false => Err(AppError::GitCommand {
-                args: output.args,
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }),
-        }
+        let note_path = self.note_path(oid)?;
+        let note_blob = self
+            .git
+            .repo
+            .write_blob(body.as_bytes())
+            .map_err(|err| git_error("writing note blob", err))?
+            .detach();
+        self.rewrite_notes_tree(|editor| {
+            editor
+                .upsert(&note_path, EntryKind::Blob, note_blob)
+                .map_err(|err| git_error("updating note entry", err))?;
+            Ok(())
+        })
     }
 
     fn prune(&self) -> Result<(), AppError> {
-        let stdout = self
-            .git
-            .run_string(["notes", "--ref", NOTES_REF, "prune"])?;
-        print!("{stdout}");
-        Ok(())
+        let entries = self.note_entries()?;
+        let stale_paths = entries
+            .into_iter()
+            .filter(|entry| !self.git.repo.has_object(entry.annotated.as_object_id()))
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>();
+        if stale_paths.is_empty() {
+            return Ok(());
+        }
+        self.rewrite_notes_tree(|editor| {
+            stale_paths.iter().try_for_each(|path| {
+                editor
+                    .remove(path)
+                    .map_err(|err| git_error("removing stale note", err))?;
+                println!("Removing note for object {path}");
+                Ok(())
+            })
+        })
     }
 }
 
@@ -633,22 +903,22 @@ fn mark_paths(git: &Git, notes: &impl NotesStore, paths: Vec<PathBuf>) -> Result
         .collect::<Result<Vec<_>, _>>()?;
     let targets = paths
         .iter()
-        .map(|path| git.blob_at_head(path).map(|blob| (path.clone(), blob)))
+        .map(|path| git.blob_at_head(path))
         .collect::<Result<Vec<_>, _>>()?;
     let reviewer = git.reviewer()?;
     let commit = git.head_commit()?;
     let reviewed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
-    targets.iter().try_for_each(|(path, blob)| {
+    targets.iter().try_for_each(|file| {
         let record = ReviewRecord {
             reviewed_at: reviewed_at.clone(),
             reviewer: reviewer.clone(),
-            commit: commit.clone(),
-            path: path.clone(),
+            commit,
+            path: file.path.clone(),
         };
-        let body = append_record(notes.note_body(blob)?.as_deref(), &record);
-        notes.write_note_body(blob, &body)?;
-        println!("marked {path}");
+        let body = append_record(notes.note_body(&file.blob)?.as_deref(), &record);
+        notes.write_note_body(&file.blob, &body)?;
+        println!("marked {}", file.path);
         Ok(())
     })
 }
@@ -697,12 +967,8 @@ fn check_status(tracked: &[TrackedFile], reviewed: &ReviewedSet) -> Result<Gate,
 
 fn diff_path(git: &Git, notes: &impl NotesStore, path: PathBuf) -> Result<(), AppError> {
     let path = git.normalize_user_path(&path)?;
-    let blob = git.blob_at_head(&path)?;
+    let file = git.blob_at_head(&path)?;
     let reviewed = notes.list_reviewed()?;
-    let file = TrackedFile {
-        path: path.clone(),
-        blob: blob.clone(),
-    };
     let classified = classify_path(git, &file, &reviewed)?;
 
     match classified.state {
@@ -711,14 +977,18 @@ fn diff_path(git: &Git, notes: &impl NotesStore, path: PathBuf) -> Result<(), Ap
             Ok(())
         }
         ReviewState::New => {
-            print!("{}", git.diff_empty_tree_to_head(&path)?);
+            print!("{}", git.diff_empty_to_head(&file)?);
             Ok(())
         }
-        ReviewState::Stale { baseline } => {
-            print!(
-                "{}",
-                git.diff_blobs_with_path_label(&baseline, &blob, &path)?
-            );
+        ReviewState::Stale {
+            baseline,
+            baseline_mode,
+        } => {
+            let baseline = HistoricalBlob {
+                blob: baseline,
+                mode: baseline_mode,
+            };
+            print!("{}", git.diff_blobs_with_path_label(&baseline, &file)?);
             Ok(())
         }
     }
@@ -733,22 +1003,27 @@ fn classify_path(
         true => Ok(ClassifiedFile {
             path: file.path.clone(),
             state: ReviewState::Vetted,
-            blob: file.blob.clone(),
+            blob: file.blob,
             metadata: reviewed.metadata(&file.blob),
         }),
         false => {
             let baseline = git
                 .historical_blobs(&file.path, &file.blob)?
                 .into_iter()
-                .find(|oid| reviewed.contains(oid));
-            let metadata = baseline.as_ref().and_then(|oid| reviewed.metadata(oid));
+                .find(|entry| reviewed.contains(&entry.blob));
+            let metadata = baseline
+                .as_ref()
+                .and_then(|entry| reviewed.metadata(&entry.blob));
             let state = baseline
-                .map(|baseline| ReviewState::Stale { baseline })
+                .map(|baseline| ReviewState::Stale {
+                    baseline: baseline.blob,
+                    baseline_mode: baseline.mode,
+                })
                 .unwrap_or(ReviewState::New);
             Ok(ClassifiedFile {
                 path: file.path.clone(),
                 state,
-                blob: file.blob.clone(),
+                blob: file.blob,
                 metadata,
             })
         }
@@ -871,19 +1146,9 @@ fn parse_note_record(line: &str) -> Option<ReviewRecord> {
     Some(ReviewRecord {
         reviewed_at: fields.get("reviewed-at")?.to_string(),
         reviewer: fields.get("reviewer")?.to_string(),
-        commit: CommitOid::new(fields.get("commit")?.to_string()),
+        commit: CommitOid::new(gix::ObjectId::from_hex(fields.get("commit")?.as_bytes()).ok()?),
         path: RepoPath::from_git_path(fields.get("path")?).ok()?,
     })
-}
-
-fn parse_raw_log_new_oid(line: &str) -> Option<BlobOid> {
-    let raw = line.strip_prefix(':')?;
-    let (metadata, _) = raw.split_once('\t')?;
-    let fields = metadata.split_whitespace().collect::<Vec<_>>();
-    match fields.as_slice() {
-        [_, _, _, new_oid, _status] => Some(BlobOid::new(*new_oid)),
-        _ => None,
-    }
 }
 
 #[derive(Debug)]
@@ -913,187 +1178,23 @@ impl Vetignore {
     }
 }
 
-struct ScopedTempDir {
-    path: PathBuf,
+fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, AppError> {
+    let root = normalize_lexically(root);
+    let cwd = normalize_lexically(cwd);
+    cwd.strip_prefix(&root)
+        .map(Path::to_path_buf)
+        .map_err(|_| AppError::PathOutsideRepo(cwd.display().to_string()))
 }
 
-impl ScopedTempDir {
-    fn new(prefix: &str) -> std::io::Result<Self> {
-        let base = env::temp_dir();
-        let pid = std::process::id();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
-
-        for attempt in 0..1000 {
-            let path = base.join(format!("{prefix}-{pid}-{nanos}-{attempt}"));
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "could not create a unique temporary directory",
-        ))
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
+fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, AppError> {
+    let path = path
+        .to_str()
+        .map_err(|err| AppError::NonUtf8Path(err.to_string()))?;
+    RepoPath::from_git_path(path)
 }
 
-impl Drop for ScopedTempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-fn write_blob_file(path: &Path, contents: &[u8]) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, contents)?;
-    Ok(())
-}
-
-fn relabel_no_index_diff(
-    diff: &str,
-    baseline_path: &Path,
-    current_path: &Path,
-    repo_path: &RepoPath,
-) -> String {
-    [("1", "2"), ("a", "b")]
-        .into_iter()
-        .fold(diff.to_owned(), |diff, (old_prefix, new_prefix)| {
-            let diff =
-                replace_git_diff_path(&diff, baseline_path, old_prefix, &format!("a/{repo_path}"));
-            replace_git_diff_path(&diff, current_path, new_prefix, &format!("b/{repo_path}"))
-        })
-}
-
-fn replace_git_diff_path(diff: &str, path: &Path, prefix: &str, replacement: &str) -> String {
-    let raw = path.to_string_lossy();
-    let quoted = raw.replace('\\', "\\\\").replace('"', "\\\"");
-    [
-        format!("\"{prefix}{quoted}\""),
-        format!("\"{prefix}/{quoted}\""),
-        format!("{prefix}{raw}"),
-        format!("{prefix}/{raw}"),
-    ]
-    .into_iter()
-    .fold(diff.to_owned(), |diff, candidate| {
-        diff.replace(&candidate, replacement)
-    })
-}
-
-fn parse_ls_tree(output: &[u8]) -> Result<Vec<TreeEntry>, AppError> {
-    output
-        .split(|byte| *byte == b'\0')
-        .filter(|record| !record.is_empty())
-        .map(parse_ls_tree_record)
-        .collect()
-}
-
-fn parse_ls_tree_record(record: &[u8]) -> Result<TreeEntry, AppError> {
-    let text =
-        String::from_utf8(record.to_vec()).map_err(|err| AppError::NonUtf8Path(err.to_string()))?;
-    let (metadata, path) = text
-        .split_once('\t')
-        .ok_or_else(|| AppError::NonUtf8Path("malformed ls-tree record".to_owned()))?;
-    let fields = metadata.split_whitespace().collect::<Vec<_>>();
-    match fields.as_slice() {
-        [_mode, kind, oid] => Ok(TreeEntry {
-            kind: GitObjectKind::from_git(kind),
-            oid: BlobOid::new(*oid),
-            path: RepoPath::from_git_path(path)?,
-        }),
-        _ => Err(AppError::NonUtf8Path(
-            "malformed ls-tree metadata".to_owned(),
-        )),
-    }
-}
-
-fn run_git_from_current<I, S>(args: I) -> Result<Vec<u8>, AppError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = run_git(None, args, None)?;
-    match output.status.success() {
-        true => Ok(output.stdout),
-        false => Err(AppError::GitCommand {
-            args: output.args,
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }),
-    }
-}
-
-fn run_git<I, S>(cwd: Option<&Path>, args: I, stdin: Option<&[u8]>) -> Result<GitOutput, AppError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let args = args
-        .into_iter()
-        .map(|arg| arg.as_ref().to_owned())
-        .collect::<Vec<_>>();
-    let display_args = args
-        .iter()
-        .map(|arg| shell_display(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let mut command = Command::new("git");
-    if let Some(cwd) = cwd {
-        command.arg("-C").arg(cwd);
-    }
-    command.args(&args);
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let output = match stdin {
-        Some(input) => {
-            let mut child = command
-                .stdin(Stdio::piped())
-                .spawn()
-                .map_err(AppError::GitIo)?;
-            child
-                .stdin
-                .take()
-                .expect("stdin is piped")
-                .write_all(input)?;
-            child.wait_with_output().map_err(AppError::GitIo)?
-        }
-        None => command.output().map_err(AppError::GitIo)?,
-    };
-
-    Ok(GitOutput {
-        args: display_args,
-        status: output.status,
-        stdout: output.stdout,
-        stderr: output.stderr,
-    })
-}
-
-fn trim_stdout(output: &[u8]) -> String {
-    String::from_utf8_lossy(output)
-        .trim_end_matches(['\r', '\n'])
-        .to_string()
-}
-
-fn shell_display(arg: &OsStr) -> String {
-    let value = arg.to_string_lossy();
-    match value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "@%_+=:,./-".contains(ch))
-    {
-        true => value.into_owned(),
-        false => format!("'{value}'"),
-    }
+fn zero_oid(kind: gix::hash::Kind) -> String {
+    "0".repeat(kind.len_in_hex())
 }
 
 fn normalize_lexically(path: &Path) -> PathBuf {
@@ -1138,50 +1239,28 @@ fn repo_path_from_relative(path: &Path) -> Result<String, AppError> {
 mod tests {
     use super::*;
 
+    fn oid(hex: &str) -> gix::ObjectId {
+        gix::ObjectId::from_hex(hex.as_bytes()).unwrap()
+    }
+
     #[test]
     fn append_record_sorts_and_deduplicates_records() {
         let record = ReviewRecord {
             reviewed_at: "2026-06-06T00:00:00Z".to_owned(),
             reviewer: "reviewer@example.com".to_owned(),
-            commit: CommitOid::new("abc"),
+            commit: CommitOid::new(oid("0123456789012345678901234567890123456789")),
             path: RepoPath::from_git_path("src/main.rs").unwrap(),
         };
-        let existing = "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit=abc path=src/main.rs\n";
+        let existing = "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit=0123456789012345678901234567890123456789 path=src/main.rs\n";
 
         assert_eq!(append_record(Some(existing), &record), existing);
     }
 
     #[test]
-    fn parse_raw_log_line_returns_new_oid() {
-        let line = ":100644 100644 oldoid newoid M\tpath";
-
-        assert_eq!(parse_raw_log_new_oid(line), Some(BlobOid::new("newoid")));
-    }
-
-    #[test]
-    fn relabel_no_index_diff_handles_git_prefix_variants() {
-        let baseline = Path::new("/tmp/git-vet/baseline/a.txt");
-        let current = Path::new("/tmp/git-vet/current/a.txt");
-        let path = RepoPath::from_git_path("a.txt").unwrap();
-
-        let numbered = "diff --git 1/tmp/git-vet/baseline/a.txt 2/tmp/git-vet/current/a.txt\n--- 1/tmp/git-vet/baseline/a.txt\n+++ 2/tmp/git-vet/current/a.txt\n";
-        assert_eq!(
-            relabel_no_index_diff(numbered, baseline, current, &path),
-            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
-        );
-
-        let lettered = "diff --git a/tmp/git-vet/baseline/a.txt b/tmp/git-vet/current/a.txt\n--- a/tmp/git-vet/baseline/a.txt\n+++ b/tmp/git-vet/current/a.txt\n";
-        assert_eq!(
-            relabel_no_index_diff(lettered, baseline, current, &path),
-            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
-        );
-
-        let windows_baseline = Path::new(r"C:\Users\runner\Temp\git-vet\baseline\a.txt");
-        let windows_current = Path::new(r"C:\Users\runner\Temp\git-vet\current\a.txt");
-        let quoted_windows = "diff --git \"a/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\baseline\\\\a.txt\" \"b/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\current\\\\a.txt\"\n--- \"a/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\baseline\\\\a.txt\"\n+++ \"b/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\current\\\\a.txt\"\n";
-        assert_eq!(
-            relabel_no_index_diff(quoted_windows, windows_baseline, windows_current, &path),
-            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
-        );
+    fn repo_path_from_relative_rejects_empty_paths() {
+        assert!(matches!(
+            repo_path_from_relative(Path::new("")),
+            Err(AppError::EmptyPath)
+        ));
     }
 }
