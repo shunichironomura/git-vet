@@ -1,22 +1,37 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::git_types::{BlobOid, CommitOid, FileMode};
 use crate::path::RepoPath;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Vetter {
+    pub(crate) name: String,
+    pub(crate) email: String,
+}
+
+impl Vetter {
+    pub(crate) const fn new(name: String, email: String) -> Self {
+        Self { name, email }
+    }
+
+    pub(crate) fn display(&self) -> String {
+        format!("{} <{}>", self.name, self.email)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRecord {
-    pub(crate) reviewed_at: String,
-    pub(crate) reviewer: String,
+    pub(crate) vetted_at: String,
+    pub(crate) vetted_by: Vetter,
     pub(crate) commit: CommitOid,
     pub(crate) path: RepoPath,
 }
 
 impl ReviewRecord {
-    fn render(&self) -> String {
-        format!(
-            "reviewed-at={} reviewer={} commit={} path={}",
-            self.reviewed_at, self.reviewer, self.commit, self.path
-        )
+    fn render(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&NoteRecord::from(self))
     }
 }
 
@@ -29,18 +44,18 @@ impl ReviewInfo {
     fn latest_metadata(&self) -> Option<ReviewMetadata> {
         self.records
             .iter()
-            .max_by(|left, right| left.reviewed_at.cmp(&right.reviewed_at))
+            .max_by(|left, right| left.vetted_at.cmp(&right.vetted_at))
             .map(|record| ReviewMetadata {
-                last_reviewed_at: record.reviewed_at.clone(),
-                reviewer: record.reviewer.clone(),
+                last_vetted_at: record.vetted_at.clone(),
+                vetted_by: record.vetted_by.clone(),
             })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewMetadata {
-    pub(crate) last_reviewed_at: String,
-    pub(crate) reviewer: String,
+    pub(crate) last_vetted_at: String,
+    pub(crate) vetted_by: Vetter,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,13 +108,16 @@ pub struct ClassifiedFile {
     pub(crate) metadata: Option<ReviewMetadata>,
 }
 
-pub fn append_record(existing: Option<&str>, new_record: &ReviewRecord) -> String {
+pub fn append_record(
+    existing: Option<&str>,
+    new_record: &ReviewRecord,
+) -> Result<String, serde_json::Error> {
     let already_recorded = existing
         .map(parse_note_records)
         .unwrap_or_default()
         .iter()
         .any(|record| {
-            record.reviewer == new_record.reviewer
+            record.vetted_by == new_record.vetted_by
                 && record.commit == new_record.commit
                 && record.path == new_record.path
         });
@@ -110,15 +128,17 @@ pub fn append_record(existing: Option<&str>, new_record: &ReviewRecord) -> Strin
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
-        .chain((!already_recorded).then(|| new_record.render()))
         .collect::<Vec<_>>();
+    if !already_recorded {
+        lines.push(new_record.render()?);
+    }
     lines.sort();
     lines.dedup();
 
     if lines.is_empty() {
-        String::new()
+        Ok(String::new())
     } else {
-        format!("{}\n", lines.join("\n"))
+        Ok(format!("{}\n", lines.join("\n")))
     }
 }
 
@@ -127,17 +147,39 @@ pub fn parse_note_records(body: &str) -> Vec<ReviewRecord> {
 }
 
 fn parse_note_record(line: &str) -> Option<ReviewRecord> {
-    let fields = line
-        .split_whitespace()
-        .filter_map(|field| field.split_once('='))
-        .collect::<HashMap<_, _>>();
+    serde_json::from_str::<NoteRecord>(line)
+        .ok()
+        .and_then(NoteRecord::into_review_record)
+}
 
-    Some(ReviewRecord {
-        reviewed_at: fields.get("reviewed-at")?.to_string(),
-        reviewer: fields.get("reviewer")?.to_string(),
-        commit: CommitOid::new(gix::ObjectId::from_hex(fields.get("commit")?.as_bytes()).ok()?),
-        path: RepoPath::from_git_path(fields.get("path")?).ok()?,
-    })
+#[derive(Deserialize, Serialize)]
+struct NoteRecord {
+    vetted_at: String,
+    vetted_by: Vetter,
+    commit: String,
+    path: String,
+}
+
+impl From<&ReviewRecord> for NoteRecord {
+    fn from(record: &ReviewRecord) -> Self {
+        Self {
+            vetted_at: record.vetted_at.clone(),
+            vetted_by: record.vetted_by.clone(),
+            commit: record.commit.to_string(),
+            path: record.path.to_string(),
+        }
+    }
+}
+
+impl NoteRecord {
+    fn into_review_record(self) -> Option<ReviewRecord> {
+        Some(ReviewRecord {
+            vetted_at: self.vetted_at,
+            vetted_by: self.vetted_by,
+            commit: CommitOid::new(gix::ObjectId::from_hex(self.commit.as_bytes()).ok()?),
+            path: RepoPath::from_git_path(&self.path).ok()?,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -151,14 +193,14 @@ mod tests {
     #[test]
     fn append_record_sorts_and_deduplicates_records() -> Result<(), Box<dyn std::error::Error>> {
         let record = ReviewRecord {
-            reviewed_at: "2026-06-06T00:00:00Z".to_owned(),
-            reviewer: "reviewer@example.com".to_owned(),
+            vetted_at: "2026-06-06T00:00:00Z".to_owned(),
+            vetted_by: Vetter::new("Reviewer".to_owned(), "reviewer@example.com".to_owned()),
             commit: CommitOid::new(oid("0123456789012345678901234567890123456789")?),
             path: RepoPath::from_git_path("src/main.rs")?,
         };
-        let existing = "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit=0123456789012345678901234567890123456789 path=src/main.rs\n";
+        let existing = "{\"vetted_at\":\"2026-06-06T00:00:00Z\",\"vetted_by\":{\"name\":\"Reviewer\",\"email\":\"reviewer@example.com\"},\"commit\":\"0123456789012345678901234567890123456789\",\"path\":\"src/main.rs\"}\n";
 
-        assert_eq!(append_record(Some(existing), &record), existing);
+        assert_eq!(append_record(Some(existing), &record)?, existing);
         Ok(())
     }
 }

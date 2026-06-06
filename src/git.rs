@@ -13,6 +13,7 @@ use crate::git_types::{BlobOid, CommitOid, FileMode, HistoricalBlob, TrackedFile
 use crate::path::{
     RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr, repo_path_from_relative,
 };
+use crate::review::Vetter;
 
 pub struct Git {
     pub(crate) repo: gix::Repository,
@@ -92,21 +93,28 @@ impl Git {
             .map_err(|err| git_error("reading HEAD", err))
     }
 
-    pub(crate) fn reviewer(&self) -> Result<String, AppError> {
-        let reviewer = self
-            .repo
-            .config_snapshot()
+    pub(crate) fn vetter(&self) -> Result<Vetter, AppError> {
+        let config = self.repo.config_snapshot();
+        let name = config
+            .string("user.name")
+            .ok_or(AppError::MissingUserName)?;
+        let email = config
             .string("user.email")
             .ok_or(AppError::MissingUserEmail)?;
-        let reviewer = reviewer
+        let name = name
             .to_str()
             .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
             .trim()
             .to_owned();
-        if reviewer.is_empty() {
-            Err(AppError::MissingUserEmail)
-        } else {
-            Ok(reviewer)
+        let email = email
+            .to_str()
+            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
+            .trim()
+            .to_owned();
+        match (name.is_empty(), email.is_empty()) {
+            (true, _) => Err(AppError::MissingUserName),
+            (_, true) => Err(AppError::MissingUserEmail),
+            (false, false) => Ok(Vetter::new(name, email)),
         }
     }
 

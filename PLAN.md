@@ -59,7 +59,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - otherwise walk path history newest-to-oldest, following renames, to find a reviewed baseline → `Stale`
   - otherwise → `New`
 - Keep history walking out of `status --check`.
-- Parse note records enough to populate `last_reviewed_at` and `reviewer` for JSON/status metadata.
+- Parse note records enough to populate `last_vetted_at` and `vetted_by` for JSON/status metadata.
 - Validate channel names by ensuring `refs/notes/vet/<channel>` is a valid Git refname.
 
 ### Tests and acceptance criteria

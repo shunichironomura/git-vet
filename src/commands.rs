@@ -33,18 +33,18 @@ pub fn mark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Resu
         .iter()
         .map(|path| git.blob_at_head(path))
         .collect::<Result<Vec<_>, _>>()?;
-    let reviewer = git.reviewer()?;
+    let vetter = git.vetter()?;
     let commit = git.head_commit()?;
-    let reviewed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let vetted_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
     targets.iter().try_for_each(|file| {
         let record = ReviewRecord {
-            reviewed_at: reviewed_at.clone(),
-            reviewer: reviewer.clone(),
+            vetted_at: vetted_at.clone(),
+            vetted_by: vetter.clone(),
             commit,
             path: file.path.clone(),
         };
-        let body = append_record(notes.note_body(&file.blob)?.as_deref(), &record);
+        let body = append_record(notes.note_body(&file.blob)?.as_deref(), &record)?;
         notes.write_note_body(&file.blob, &body)?;
         stdout_line(format_args!("marked {}", file.path))
     })

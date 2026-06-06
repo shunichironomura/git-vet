@@ -191,8 +191,8 @@ fn empty_notes_ref_means_tracked_files_are_new() {
     let record = record_for(records, "a.txt");
     assert_eq!(record["state"], "new");
     assert!(record["baseline"].is_null());
-    assert!(record["last_reviewed_at"].is_null());
-    assert!(record["reviewer"].is_null());
+    assert!(record["last_vetted_at"].is_null());
+    assert!(record["vetted_by"].is_null());
 }
 
 #[test]
@@ -207,8 +207,9 @@ fn mark_makes_a_file_vetted() {
     let records = status_json(&repo);
     let record = record_for(&records, "a.txt");
     assert_eq!(record["state"], "vetted");
-    assert_eq!(record["reviewer"], "reviewer@example.com");
-    assert!(!record["last_reviewed_at"].is_null());
+    assert_eq!(record["vetted_by"]["name"], "Reviewer");
+    assert_eq!(record["vetted_by"]["email"], "reviewer@example.com");
+    assert!(!record["last_vetted_at"].is_null());
 
     let diff = repo.run_vet(&["diff", "a.txt"]);
     assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
@@ -229,8 +230,13 @@ fn mark_writes_default_channel_git_notes() {
         ["notes", "--ref=vet/default", "show", "HEAD:a.txt"],
     ));
     let note = stdout(&note);
-    assert!(note.contains("reviewer=reviewer@example.com"), "{note}");
-    assert!(note.contains("path=a.txt"), "{note}");
+    assert!(note.contains("\"vetted_by\":{"), "{note}");
+    assert!(note.contains("\"name\":\"Reviewer\""), "{note}");
+    assert!(
+        note.contains("\"email\":\"reviewer@example.com\""),
+        "{note}"
+    );
+    assert!(note.contains("\"path\":\"a.txt\""), "{note}");
 
     let strategy = assert_git_success(git_output(
         repo.path(),
@@ -247,7 +253,7 @@ fn status_reads_default_channel_git_notes() {
     let head = assert_git_success(git_output(repo.path(), ["rev-parse", "HEAD"]));
     let head = stdout(&head).trim().to_owned();
     let note = format!(
-        "reviewed-at=2026-06-06T00:00:00Z reviewer=reviewer@example.com commit={head} path=a.txt"
+        "{{\"vetted_at\":\"2026-06-06T00:00:00Z\",\"vetted_by\":{{\"name\":\"Reviewer\",\"email\":\"reviewer@example.com\"}},\"commit\":\"{head}\",\"path\":\"a.txt\"}}"
     );
     run_git(
         repo.path(),
@@ -264,8 +270,9 @@ fn status_reads_default_channel_git_notes() {
     let records = status_json(&repo);
     let record = record_for(&records, "a.txt");
     assert_eq!(record["state"], "vetted");
-    assert_eq!(record["reviewer"], "reviewer@example.com");
-    assert_eq!(record["last_reviewed_at"], "2026-06-06T00:00:00Z");
+    assert_eq!(record["vetted_by"]["name"], "Reviewer");
+    assert_eq!(record["vetted_by"]["email"], "reviewer@example.com");
+    assert_eq!(record["last_vetted_at"], "2026-06-06T00:00:00Z");
 }
 
 #[test]
@@ -309,7 +316,7 @@ fn review_channels_are_independent() {
         ["notes", "--ref=vet/security", "show", "HEAD:a.txt"],
     ));
     assert!(
-        stdout(&security_note).contains("reviewer=reviewer@example.com"),
+        stdout(&security_note).contains("\"email\":\"reviewer@example.com\""),
         "{}",
         stdout(&security_note)
     );
@@ -360,14 +367,15 @@ fn editing_and_committing_a_marked_file_makes_it_stale() {
     let record = record_for(&records, "a.txt");
     assert_eq!(record["state"], "stale");
     assert!(!record["baseline"].is_null());
-    assert_eq!(record["reviewer"], "reviewer@example.com");
+    assert_eq!(record["vetted_by"]["name"], "Reviewer");
+    assert_eq!(record["vetted_by"]["email"], "reviewer@example.com");
 
     let security_records =
         status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
     let security_record = record_for(&security_records, "a.txt");
     assert_eq!(security_record["state"], "new");
     assert!(security_record["baseline"].is_null());
-    assert!(security_record["reviewer"].is_null());
+    assert!(security_record["vetted_by"].is_null());
 }
 
 #[test]

@@ -95,13 +95,14 @@ Each note is attached to a **blob** object (not a commit), keyed by the blob OID
 The body is an append-only set of review records, one per line, so the same content reviewed more than once in the same channel (or by more than one person in that channel) accumulates an audit trail:
 
 ```
-reviewed-at=2026-06-06T12:30:00+09:00 reviewer=user@example.com commit=<sha-at-review> path=src/foo.rs
+{"vetted_at":"2026-06-06T12:30:00+09:00","vetted_by":{"name":"User Name","email":"user@example.com"},"commit":"<sha-at-vet>","path":"src/foo.rs"}
 ```
 
-- `reviewed-at` — ISO 8601 timestamp.
-- `reviewer` — from `git config user.email`.
-- `commit` — the `HEAD` SHA at review time (provenance; the blob is the real key).
-- `path` — the path reviewed (provenance only; a blob can appear at multiple paths).
+- `vetted_at` — ISO 8601 timestamp.
+- `vetted_by.name` — from `git config user.name`.
+- `vetted_by.email` — from `git config user.email`.
+- `commit` — the `HEAD` SHA at vet time (provenance; the blob is the real key).
+- `path` — the path vetted (provenance only; a blob can appear at multiple paths).
 
 Records are sorted/deduplicated by the notes merge strategy (§5.4), so re-marking identical content is idempotent.
 
@@ -147,7 +148,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 ### 6.1 `status` output modes
 
 - Default: human-readable grouping by derived state, including the active channel.
-- `--json`: object `{ "channel": str, "files": [ { "path": str, "state": "vetted"|"stale"|"new", "blob": oid, "baseline": oid|null, "last_reviewed_at": str|null, "reviewer": str|null } ] }`.
+- `--json`: object `{ "channel": str, "files": [ { "path": str, "state": "vetted"|"stale"|"new", "blob": oid, "baseline": oid|null, "last_vetted_at": str|null, "vetted_by": { "name": str, "email": str }|null } ] }`.
 - `--check`: release-gate mode for the selected channel. Print the unreviewed files; **exit non-zero** if any in-scope file is `stale` or `new` in that channel.
 
 ### 6.2 Exit codes

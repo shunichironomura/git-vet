@@ -6,7 +6,7 @@ use crate::channel::ReviewChannel;
 use crate::error::AppError;
 use crate::git_types::BlobOid;
 use crate::path::RepoPath;
-use crate::review::{ClassifiedFile, ReviewState};
+use crate::review::{ClassifiedFile, ReviewState, Vetter};
 
 #[derive(Serialize)]
 struct JsonStatus<'a> {
@@ -20,8 +20,8 @@ struct JsonStatusRecord<'a> {
     state: &'static str,
     blob: &'a BlobOid,
     baseline: Option<&'a BlobOid>,
-    last_reviewed_at: Option<&'a str>,
-    reviewer: Option<&'a str>,
+    last_vetted_at: Option<&'a str>,
+    vetted_by: Option<&'a Vetter>,
 }
 
 pub fn json_status(
@@ -35,14 +35,11 @@ pub fn json_status(
             state: file.state.as_str(),
             blob: &file.blob,
             baseline: file.state.baseline(),
-            last_reviewed_at: file
+            last_vetted_at: file
                 .metadata
                 .as_ref()
-                .map(|metadata| metadata.last_reviewed_at.as_str()),
-            reviewer: file
-                .metadata
-                .as_ref()
-                .map(|metadata| metadata.reviewer.as_str()),
+                .map(|metadata| metadata.last_vetted_at.as_str()),
+            vetted_by: file.metadata.as_ref().map(|metadata| &metadata.vetted_by),
         })
         .collect::<Vec<_>>();
     serde_json::to_string_pretty(&JsonStatus { channel, files })
@@ -95,8 +92,9 @@ fn human_status_line(file: &ClassifiedFile) -> String {
         .as_ref()
         .map(|metadata| {
             format!(
-                " reviewed-at={} reviewer={}",
-                metadata.last_reviewed_at, metadata.reviewer
+                " vetted-at={} vetted-by={}",
+                metadata.last_vetted_at,
+                metadata.vetted_by.display()
             )
         })
         .unwrap_or_default();
