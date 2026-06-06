@@ -966,17 +966,28 @@ fn relabel_no_index_diff(
     current_path: &Path,
     repo_path: &RepoPath,
 ) -> String {
-    let baseline = baseline_path.to_string_lossy();
-    let current = current_path.to_string_lossy();
     [("1", "2"), ("a", "b")]
         .into_iter()
         .fold(diff.to_owned(), |diff, (old_prefix, new_prefix)| {
-            diff.replace(
-                &format!("{old_prefix}{baseline}"),
-                &format!("a/{repo_path}"),
-            )
-            .replace(&format!("{new_prefix}{current}"), &format!("b/{repo_path}"))
+            let diff =
+                replace_git_diff_path(&diff, baseline_path, old_prefix, &format!("a/{repo_path}"));
+            replace_git_diff_path(&diff, current_path, new_prefix, &format!("b/{repo_path}"))
         })
+}
+
+fn replace_git_diff_path(diff: &str, path: &Path, prefix: &str, replacement: &str) -> String {
+    let raw = path.to_string_lossy();
+    let quoted = raw.replace('\\', "\\\\").replace('"', "\\\"");
+    [
+        format!("\"{prefix}{quoted}\""),
+        format!("\"{prefix}/{quoted}\""),
+        format!("{prefix}{raw}"),
+        format!("{prefix}/{raw}"),
+    ]
+    .into_iter()
+    .fold(diff.to_owned(), |diff, candidate| {
+        diff.replace(&candidate, replacement)
+    })
 }
 
 fn parse_ls_tree(output: &[u8]) -> Result<Vec<TreeEntry>, AppError> {
@@ -1162,6 +1173,14 @@ mod tests {
         let lettered = "diff --git a/tmp/git-vet/baseline/a.txt b/tmp/git-vet/current/a.txt\n--- a/tmp/git-vet/baseline/a.txt\n+++ b/tmp/git-vet/current/a.txt\n";
         assert_eq!(
             relabel_no_index_diff(lettered, baseline, current, &path),
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
+        );
+
+        let windows_baseline = Path::new(r"C:\Users\runner\Temp\git-vet\baseline\a.txt");
+        let windows_current = Path::new(r"C:\Users\runner\Temp\git-vet\current\a.txt");
+        let quoted_windows = "diff --git \"a/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\baseline\\\\a.txt\" \"b/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\current\\\\a.txt\"\n--- \"a/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\baseline\\\\a.txt\"\n+++ \"b/C:\\\\Users\\\\runner\\\\Temp\\\\git-vet\\\\current\\\\a.txt\"\n";
+        assert_eq!(
+            relabel_no_index_diff(quoted_windows, windows_baseline, windows_current, &path),
             "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
         );
     }
