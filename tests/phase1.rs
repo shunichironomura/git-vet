@@ -408,13 +408,27 @@ fn diff_for_new_and_stale_files_shows_git_diffs() {
         stderr(&stale_diff)
     );
     let stale_diff = stdout(&stale_diff);
-    assert!(
-        stale_diff.contains("diff --git a/a.txt b/a.txt"),
-        "{stale_diff}"
-    );
-    assert!(stale_diff.contains("--- a/a.txt"), "{stale_diff}");
-    assert!(stale_diff.contains("+++ b/a.txt"), "{stale_diff}");
+    assert!(stale_diff.contains("diff --git "), "{stale_diff}");
     assert!(stale_diff.contains("+world"), "{stale_diff}");
+}
+
+#[test]
+fn diff_uses_git_diff_machinery() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    repo.write("a.txt", "hello\nworld\n");
+    repo.commit_all("edit");
+    run_git(
+        repo.path(),
+        ["config", "diff.external", "echo GIT-VET-EXTERNAL-DIFF"],
+    );
+
+    let diff = repo.run_vet(&["diff", "a.txt"]);
+    assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
+    assert!(stdout(&diff).contains("GIT-VET-EXTERNAL-DIFF"));
 }
 
 #[test]

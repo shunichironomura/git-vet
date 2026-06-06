@@ -1,6 +1,6 @@
 use std::fmt;
 
-use gix::objs::tree::{EntryKind, EntryMode};
+use gix::objs::tree::EntryMode;
 use serde::{Serialize, Serializer};
 
 use crate::path::RepoPath;
@@ -11,14 +11,6 @@ pub struct BlobOid(gix::ObjectId);
 impl BlobOid {
     pub(crate) const fn new(oid: gix::ObjectId) -> Self {
         Self(oid)
-    }
-
-    pub(crate) const fn as_object_id(&self) -> gix::ObjectId {
-        self.0
-    }
-
-    pub(crate) fn short(&self) -> String {
-        self.0.to_hex_with_len(12).to_string()
     }
 }
 
@@ -60,10 +52,6 @@ impl FileMode {
         Self(mode)
     }
 
-    pub(crate) const fn kind(self) -> EntryKind {
-        self.0.kind()
-    }
-
     pub(crate) const fn is_reviewable_file(self) -> bool {
         self.0.is_blob_or_symlink()
     }
@@ -71,21 +59,10 @@ impl FileMode {
     pub(crate) const fn is_submodule(self) -> bool {
         self.0.is_commit()
     }
-
-    pub(crate) fn as_octal(self) -> String {
-        format!("{:o}", self.0)
-    }
 }
 
 #[derive(Clone, Debug)]
 pub struct TrackedFile {
     pub(crate) path: RepoPath,
     pub(crate) blob: BlobOid,
-    pub(crate) mode: FileMode,
-}
-
-#[derive(Clone, Debug)]
-pub struct HistoricalBlob {
-    pub(crate) blob: BlobOid,
-    pub(crate) mode: FileMode,
 }
