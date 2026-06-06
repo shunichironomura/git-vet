@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::git_types::{BlobOid, CommitOid, FileMode};
+use crate::git_types::{BlobOid, CommitOid};
 use crate::path::RepoPath;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,10 +76,7 @@ impl ReviewedSet {
 #[derive(Clone, Debug)]
 pub enum ReviewState {
     Vetted,
-    Stale {
-        baseline: BlobOid,
-        baseline_mode: FileMode,
-    },
+    Stale { baseline: BlobOid },
     New,
 }
 
@@ -94,7 +91,7 @@ impl ReviewState {
 
     pub(crate) const fn baseline(&self) -> Option<&BlobOid> {
         match self {
-            Self::Stale { baseline, .. } => Some(baseline),
+            Self::Stale { baseline } => Some(baseline),
             Self::Vetted | Self::New => None,
         }
     }

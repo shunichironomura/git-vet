@@ -6,7 +6,7 @@ use chrono::{SecondsFormat, Utc};
 use crate::channel::ReviewChannel;
 use crate::error::AppError;
 use crate::git::Git;
-use crate::git_types::{HistoricalBlob, TrackedFile};
+use crate::git_types::TrackedFile;
 use crate::notes::NotesStore;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
 use crate::status_output::{human_status, json_status};
@@ -110,17 +110,8 @@ pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), 
 
     match classified.state {
         ReviewState::Vetted => stdout_line(format_args!("{path} is up to date")),
-        ReviewState::New => stdout_str(&git.diff_empty_to_head(&file)?),
-        ReviewState::Stale {
-            baseline,
-            baseline_mode,
-        } => {
-            let baseline = HistoricalBlob {
-                blob: baseline,
-                mode: baseline_mode,
-            };
-            stdout_str(&git.diff_blobs_with_path_label(&baseline, &file)?)
-        }
+        ReviewState::New => git.diff_empty_to_head(&file),
+        ReviewState::Stale { baseline } => git.diff_blobs(&baseline, &file.blob),
     }
 }
 
@@ -152,14 +143,9 @@ fn classify_path(
         let baseline = git
             .historical_blobs(&file.path, &file.blob)?
             .into_iter()
-            .find(|entry| reviewed.contains(&entry.blob));
-        let metadata = baseline
-            .as_ref()
-            .and_then(|entry| reviewed.metadata(&entry.blob));
-        let state = baseline.map_or(ReviewState::New, |baseline| ReviewState::Stale {
-            baseline: baseline.blob,
-            baseline_mode: baseline.mode,
-        });
+            .find(|blob| reviewed.contains(blob));
+        let metadata = baseline.as_ref().and_then(|blob| reviewed.metadata(blob));
+        let state = baseline.map_or(ReviewState::New, |baseline| ReviewState::Stale { baseline });
         Ok(ClassifiedFile {
             path: file.path.clone(),
             state,

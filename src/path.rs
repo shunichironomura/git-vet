@@ -16,10 +16,6 @@ impl RepoPath {
         Ok(Self(path.to_owned()))
     }
 
-    pub(crate) fn as_bstr(&self) -> &gix::bstr::BStr {
-        self.0.as_bytes().as_bstr()
-    }
-
     pub(crate) fn to_path_buf(&self) -> PathBuf {
         self.0.split('/').collect()
     }
