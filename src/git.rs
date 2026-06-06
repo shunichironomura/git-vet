@@ -1,6 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use gix::bstr::ByteSlice;
 
@@ -118,55 +118,18 @@ impl Git {
         path: &RepoPath,
         current: &BlobOid,
     ) -> Result<Vec<BlobOid>, AppError> {
-        let head = self
-            .repo
-            .head_id()
-            .map_err(|err| git_error("reading HEAD", err))?
-            .detach();
-        let commits = self
-            .repo
-            .rev_walk([head])
-            .sorting(gix::revision::walk::Sorting::ByCommitTime(
-                gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
-            ))
-            .all()
-            .map_err(|err| git_error("walking commit history", err))?;
-        let mut followed_path = path.clone();
-        let mut previous_blob = None;
-        let mut history = Vec::new();
-
-        for info in commits {
-            let info = info.map_err(|err| git_error("walking commit history", err))?;
-            let commit = info
-                .object()
-                .map_err(|err| git_error("reading historical commit", err))?;
-            let tree = commit
-                .tree()
-                .map_err(|err| git_error("reading historical tree", err))?;
-            if let Some(file) = Self::lookup_file_in_tree(&tree, &followed_path)? {
-                if file.blob != *current && previous_blob != Some(file.blob) {
-                    history.push(file.blob);
-                }
-                previous_blob = Some(file.blob);
-            }
-
-            if let Some(parent_id) = info.parent_ids().next() {
-                let parent = parent_id
-                    .object()
-                    .map_err(|err| git_error("reading historical parent commit", err))?
-                    .into_commit();
-                let parent_tree = parent
-                    .tree()
-                    .map_err(|err| git_error("reading historical parent tree", err))?;
-                if let Some(source_path) =
-                    self.rename_source(&parent_tree, &tree, &followed_path)?
-                {
-                    followed_path = source_path;
-                }
-            }
-        }
-
-        Ok(history)
+        let output = self.git_output("walking path history", |command| {
+            command
+                .arg("log")
+                .arg("--follow")
+                .arg("--raw")
+                .arg("-z")
+                .arg("--no-abbrev")
+                .arg("--format=format:%x00commit%x00%H%x00")
+                .arg("--")
+                .arg(path.to_path_buf());
+        })?;
+        parse_follow_raw_history(&output, current)
     }
 
     pub(crate) fn diff_empty_to_head(&self, file: &TrackedFile) -> Result<(), AppError> {
@@ -199,6 +162,17 @@ impl Git {
         } else {
             Err(git_error("rendering git diff", status))
         }
+    }
+
+    fn git_output(
+        &self,
+        operation: &'static str,
+        configure: impl FnOnce(&mut Command),
+    ) -> Result<Vec<u8>, AppError> {
+        let mut command = self.git_command();
+        configure(&mut command);
+        let output = command.output()?;
+        stdout_from_success(operation, output)
     }
 
     fn git_command(&self) -> Command {
@@ -237,32 +211,231 @@ impl Git {
             None => Ok(None),
         }
     }
+}
 
-    fn rename_source(
-        &self,
-        old_tree: &gix::Tree<'_>,
-        new_tree: &gix::Tree<'_>,
-        destination: &RepoPath,
-    ) -> Result<Option<RepoPath>, AppError> {
-        let changes = self
-            .repo
-            .diff_tree_to_tree(Some(old_tree), Some(new_tree), None)
-            .map_err(|err| git_error("detecting renames", err))?;
-        for change in changes {
-            match change {
-                gix::diff::tree_with_rewrites::Change::Rewrite {
-                    source_location,
-                    location,
-                    copy: false,
-                    ..
-                } if repo_path_from_bstr(location.as_bstr())? == *destination => {
-                    return repo_path_from_bstr(source_location.as_bstr())
-                        .map(Some)
-                        .map_err(Into::into);
-                }
-                _ => {}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RawFileMode {
+    Missing,
+    RegularBlob,
+    ExecutableBlob,
+    Symlink,
+    Tree,
+    Submodule,
+}
+
+impl RawFileMode {
+    fn parse(mode: &str) -> Result<Self, AppError> {
+        match mode {
+            "000000" => Ok(Self::Missing),
+            "100644" => Ok(Self::RegularBlob),
+            "100755" => Ok(Self::ExecutableBlob),
+            "120000" => Ok(Self::Symlink),
+            "040000" => Ok(Self::Tree),
+            "160000" => Ok(Self::Submodule),
+            _ => Err(git_error(
+                "parsing git log raw mode",
+                format!("unexpected file mode {mode:?}"),
+            )),
+        }
+    }
+
+    const fn is_reviewable(self) -> bool {
+        matches!(
+            self,
+            Self::RegularBlob | Self::ExecutableBlob | Self::Symlink
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RawStatus {
+    Added,
+    Copied,
+    Deleted,
+    Modified,
+    Renamed,
+    TypeChanged,
+}
+
+impl RawStatus {
+    fn parse(status: &str) -> Result<Self, AppError> {
+        let Some((&kind, score)) = status.as_bytes().split_first() else {
+            return Err(git_error("parsing git log raw status", "empty status"));
+        };
+        if !score.iter().all(u8::is_ascii_digit) {
+            return Err(git_error(
+                "parsing git log raw status",
+                format!("unexpected status {status:?}"),
+            ));
+        }
+        match kind {
+            b'A' => Ok(Self::Added),
+            b'C' => Ok(Self::Copied),
+            b'D' => Ok(Self::Deleted),
+            b'M' => Ok(Self::Modified),
+            b'R' => Ok(Self::Renamed),
+            b'T' => Ok(Self::TypeChanged),
+            b'U' | b'X' | b'B' => Err(git_error(
+                "parsing git log raw status",
+                format!("unsupported status {status:?}"),
+            )),
+            _ => Err(git_error(
+                "parsing git log raw status",
+                format!("unexpected status {status:?}"),
+            )),
+        }
+    }
+
+    const fn has_destination_path(self) -> bool {
+        matches!(self, Self::Copied | Self::Renamed)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RawHeader {
+    source_mode: RawFileMode,
+    source_oid: gix::ObjectId,
+    status: RawStatus,
+}
+
+fn parse_follow_raw_history(output: &[u8], current: &BlobOid) -> Result<Vec<BlobOid>, AppError> {
+    let fields = output.split(|byte| *byte == b'\0').collect::<Vec<_>>();
+    let mut index = 0;
+    let mut history = Vec::new();
+
+    while index < fields.len() {
+        let field = trim_leading_lf(fields[index]);
+        index += 1;
+
+        if field.is_empty() {
+            continue;
+        }
+
+        if field == b"commit" {
+            let commit_oid = next_field(&fields, &mut index, "parsing git log commit marker")?;
+            parse_object_id("parsing git log commit object id", commit_oid)?;
+            continue;
+        }
+
+        let header = parse_raw_header(field)?;
+        let source_path = next_field(&fields, &mut index, "parsing git log raw source path")?;
+        parse_raw_path(source_path)?;
+        if header.status.has_destination_path() {
+            let destination_path =
+                next_field(&fields, &mut index, "parsing git log raw destination path")?;
+            parse_raw_path(destination_path)?;
+        }
+
+        if header.source_mode.is_reviewable() {
+            let blob = BlobOid::new(header.source_oid);
+            if blob != *current && history.last() != Some(&blob) {
+                history.push(blob);
             }
         }
-        Ok(None)
+    }
+
+    Ok(history)
+}
+
+fn parse_raw_header(field: &[u8]) -> Result<RawHeader, AppError> {
+    let line =
+        std::str::from_utf8(field).map_err(|err| git_error("decoding git log raw header", err))?;
+    let fields = line.strip_prefix(':').ok_or_else(|| {
+        git_error(
+            "parsing git log raw header",
+            format!("expected raw diff header, got {line:?}"),
+        )
+    })?;
+    let mut fields = fields.split(' ');
+    let source_mode = fields.next();
+    let destination_mode = fields.next();
+    let source_oid = fields.next();
+    let destination_oid = fields.next();
+    let status = fields.next();
+    let extra = fields.next();
+
+    match (
+        source_mode,
+        destination_mode,
+        source_oid,
+        destination_oid,
+        status,
+        extra,
+    ) {
+        (
+            Some(source_mode),
+            Some(destination_mode),
+            Some(source_oid),
+            Some(destination_oid),
+            Some(status),
+            None,
+        ) => {
+            let source_mode = RawFileMode::parse(source_mode)?;
+            RawFileMode::parse(destination_mode)?;
+            let source_oid = parse_object_id(
+                "parsing git log raw source object id",
+                source_oid.as_bytes(),
+            )?;
+            parse_object_id(
+                "parsing git log raw destination object id",
+                destination_oid.as_bytes(),
+            )?;
+            let status = RawStatus::parse(status)?;
+            Ok(RawHeader {
+                source_mode,
+                source_oid,
+                status,
+            })
+        }
+        _ => Err(git_error(
+            "parsing git log raw header",
+            format!("expected five raw header fields, got {line:?}"),
+        )),
+    }
+}
+
+fn parse_raw_path(path: &[u8]) -> Result<(), AppError> {
+    repo_path_from_bstr(path.as_bstr())?;
+    Ok(())
+}
+
+fn parse_object_id(operation: &'static str, oid: &[u8]) -> Result<gix::ObjectId, AppError> {
+    gix::ObjectId::from_hex(oid).map_err(|err| git_error(operation, err))
+}
+
+fn next_field<'a>(
+    fields: &[&'a [u8]],
+    index: &mut usize,
+    operation: &'static str,
+) -> Result<&'a [u8], AppError> {
+    let field = fields
+        .get(*index)
+        .ok_or_else(|| git_error(operation, "unexpected end of git log output"))?;
+    *index += 1;
+    Ok(field)
+}
+
+const fn trim_leading_lf(mut field: &[u8]) -> &[u8] {
+    while let Some((b'\n', rest)) = field.split_first() {
+        field = rest;
+    }
+    field
+}
+
+fn stdout_from_success(operation: &'static str, output: Output) -> Result<Vec<u8>, AppError> {
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(git_error(operation, command_failure_details(&output)))
+    }
+}
+
+fn command_failure_details(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        output.status.to_string()
+    } else {
+        format!("{}: {stderr}", output.status)
     }
 }
