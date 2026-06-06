@@ -36,7 +36,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - Resolve each path to `HEAD:<path>` blob.
   - Append a provenance record to `refs/notes/vet/<channel>` for that blob. Omit `--channel` to use `default`.
   - Make marking idempotent by reading existing records, appending the new record, sorting/deduplicating, then force-writing the note.
-  - Configure `notes.mergeStrategy=cat_sort_uniq` on first write.
+  - Do not mutate Git config when marking; sort/deduplicate the note body before force-writing it.
 - `git-vet [--channel <channel>] status [--json] [--check]`
   - List all tracked, in-scope files, skipping submodules/gitlinks.
   - Load reviewed blob OIDs once from `refs/notes/vet/<channel>`.
@@ -74,6 +74,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - `.vetignore` excludes files from status/check
   - untracked or missing paths exit `2`
   - default channel writes to `refs/notes/vet/default`
+  - `mark` does not write persistent `notes.mergeStrategy` config
   - channels are independent for `mark`, `status`, `diff`, and `status --check`
   - invalid channel names exit `2`
 - Manual smoke test: install/build locally and verify `git vet status` works through Git's `git-*` dispatch when the binary is on `PATH`.
@@ -92,7 +93,8 @@ Goal: finish the remaining command surface and improve team workflows without ch
   - Remove the note for each current blob.
   - Warn that this affects all paths sharing the same blob.
 - `git-vet [--channel <channel>] sync`
-  - Fetch `refs/notes/vet/<channel>`, merge with `cat_sort_uniq`, and push the selected channel ref.
+  - Fetch `refs/notes/vet/<channel>`, merge with explicit `git notes merge -s cat_sort_uniq` semantics, and push the selected channel ref.
+  - Do not persistently write `notes.mergeStrategy`; pass `-s cat_sort_uniq` for each notes merge.
   - Prefer the current branch's upstream remote, falling back to `origin`.
   - Produce clear diagnostics when no remote exists.
 - Improve edge-case behavior:

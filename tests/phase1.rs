@@ -217,7 +217,7 @@ fn mark_makes_a_file_vetted() {
 }
 
 #[test]
-fn mark_writes_default_channel_git_notes() {
+fn mark_writes_default_channel_git_notes_without_mutating_git_config() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
@@ -238,11 +238,12 @@ fn mark_writes_default_channel_git_notes() {
     );
     assert!(note.contains("\"path\":\"a.txt\""), "{note}");
 
-    let strategy = assert_git_success(git_output(
+    let strategy = git_output(
         repo.path(),
-        ["config", "--get", "notes.mergeStrategy"],
-    ));
-    assert_eq!(stdout(&strategy), "cat_sort_uniq\n");
+        ["config", "--local", "--get", "notes.mergeStrategy"],
+    );
+    assert_eq!(strategy.status.code(), Some(1));
+    assert_eq!(stdout(&strategy), "");
 }
 
 #[test]
