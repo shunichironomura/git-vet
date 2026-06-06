@@ -223,6 +223,7 @@ fn mark_makes_a_file_vetted() {
 
     let mark = repo.run_vet(&["mark", "a.txt"]);
     assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+    assert_eq!(stderr(&mark), "");
 
     let records = status_json(&repo);
     let record = record_for(&records, "a.txt");
@@ -234,6 +235,60 @@ fn mark_makes_a_file_vetted() {
     let diff = repo.run_vet(&["diff", "a.txt"]);
     assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
     assert!(stdout(&diff).contains("a.txt is up to date"));
+}
+
+#[test]
+fn mark_dirty_path_fails_noninteractive_without_allow_dirty() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    repo.write("a.txt", "hello from the dirty working tree\n");
+
+    let mark = repo.run_vet(&["mark", "a.txt"]);
+    assert_eq!(mark.status.code(), Some(2));
+    assert_eq!(stdout(&mark), "");
+    let stderr = stderr(&mark);
+    assert!(
+        stderr.contains("uncommitted changes relative to HEAD"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("a.txt"), "{stderr}");
+    assert!(stderr.contains("--allow-dirty"), "{stderr}");
+    assert!(stderr.contains("HEAD:<path> bytes"), "{stderr}");
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "new");
+}
+
+#[test]
+fn mark_allow_dirty_marks_head_blob_and_warns_without_prompting() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    repo.write("a.txt", "hello from the dirty working tree\n");
+
+    let mark = repo.run_vet(&["mark", "--allow-dirty", "a.txt"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+    assert!(stdout(&mark).contains("marked a.txt"));
+    let stderr = stderr(&mark);
+    assert!(
+        stderr.contains("uncommitted changes relative to HEAD"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("a.txt"), "{stderr}");
+    assert!(!stderr.contains("Proceed with the committed HEAD version"));
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "vetted");
+
+    repo.commit_all("commit dirty working-tree content");
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "stale");
+    assert!(!record["baseline"].is_null());
 }
 
 #[test]
