@@ -968,8 +968,15 @@ fn relabel_no_index_diff(
 ) -> String {
     let baseline = baseline_path.to_string_lossy();
     let current = current_path.to_string_lossy();
-    diff.replace(&format!("1{baseline}"), &format!("a/{repo_path}"))
-        .replace(&format!("2{current}"), &format!("b/{repo_path}"))
+    [("1", "2"), ("a", "b")]
+        .into_iter()
+        .fold(diff.to_owned(), |diff, (old_prefix, new_prefix)| {
+            diff.replace(
+                &format!("{old_prefix}{baseline}"),
+                &format!("a/{repo_path}"),
+            )
+            .replace(&format!("{new_prefix}{current}"), &format!("b/{repo_path}"))
+        })
 }
 
 fn parse_ls_tree(output: &[u8]) -> Result<Vec<TreeEntry>, AppError> {
