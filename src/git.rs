@@ -254,6 +254,19 @@ impl Git {
         parse_follow_raw_history(&output, current)
     }
 
+    pub(crate) fn history_changes(&self) -> Result<Vec<HistoryChange>, AppError> {
+        let output = self.git_output("walking repository history", |command| {
+            command
+                .arg("log")
+                .arg("--raw")
+                .arg("-z")
+                .arg("--no-abbrev")
+                .arg("--find-renames")
+                .arg("--format=format:%x00commit%x00%H%x00");
+        })?;
+        parse_raw_history_changes(&output)
+    }
+
     pub(crate) fn diff_empty_to_head(&self, file: &TrackedFile) -> Result<(), AppError> {
         let empty_tree = gix::ObjectId::empty_tree(self.repo.object_hash()).to_string();
         self.stream_git_diff(|command| {
@@ -401,6 +414,37 @@ enum RawStatus {
     TypeChanged,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryChangeStatus {
+    Added,
+    Copied,
+    Deleted,
+    Modified,
+    Renamed,
+    TypeChanged,
+}
+
+impl HistoryChangeStatus {
+    const fn from_raw(status: RawStatus) -> Self {
+        match status {
+            RawStatus::Added => Self::Added,
+            RawStatus::Copied => Self::Copied,
+            RawStatus::Deleted => Self::Deleted,
+            RawStatus::Modified => Self::Modified,
+            RawStatus::Renamed => Self::Renamed,
+            RawStatus::TypeChanged => Self::TypeChanged,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryChange {
+    pub status: HistoryChangeStatus,
+    pub before_path: RepoPath,
+    pub after_path: Option<RepoPath>,
+    pub before_blob: Option<BlobOid>,
+}
+
 impl RawStatus {
     fn parse(status: &str) -> Result<Self, AppError> {
         let Some((&kind, score)) = status.as_bytes().split_first() else {
@@ -481,6 +525,59 @@ fn parse_follow_raw_history(output: &[u8], current: &BlobOid) -> Result<Vec<Blob
     Ok(history)
 }
 
+fn parse_raw_history_changes(output: &[u8]) -> Result<Vec<HistoryChange>, AppError> {
+    let fields = output.split(|byte| *byte == b'\0').collect::<Vec<_>>();
+    let mut index = 0;
+    let mut changes = Vec::new();
+
+    while index < fields.len() {
+        let field = trim_leading_lf(fields[index]);
+        index += 1;
+
+        if field.is_empty() {
+            continue;
+        }
+
+        if field == b"commit" {
+            let commit_oid = next_field(&fields, &mut index, "parsing git log commit marker")?;
+            parse_object_id("parsing git log commit object id", commit_oid)?;
+            continue;
+        }
+
+        let header = parse_raw_header(field)?;
+        let source_path = next_field(&fields, &mut index, "parsing git log raw source path")?;
+        let source_path = parse_raw_path(source_path)?;
+        let destination_path = if header.status.has_destination_path() {
+            let destination_path =
+                next_field(&fields, &mut index, "parsing git log raw destination path")?;
+            Some(parse_raw_path(destination_path)?)
+        } else {
+            None
+        };
+
+        let after_path = match header.status {
+            RawStatus::Deleted => None,
+            RawStatus::Copied | RawStatus::Renamed => destination_path,
+            RawStatus::Added | RawStatus::Modified | RawStatus::TypeChanged => {
+                Some(source_path.clone())
+            }
+        };
+        let before_blob = header
+            .source_mode
+            .is_reviewable()
+            .then_some(BlobOid::new(header.source_oid));
+
+        changes.push(HistoryChange {
+            status: HistoryChangeStatus::from_raw(header.status),
+            before_path: source_path,
+            after_path,
+            before_blob,
+        });
+    }
+
+    Ok(changes)
+}
+
 fn parse_raw_header(field: &[u8]) -> Result<RawHeader, AppError> {
     let line =
         std::str::from_utf8(field).map_err(|err| git_error("decoding git log raw header", err))?;
@@ -538,9 +635,8 @@ fn parse_raw_header(field: &[u8]) -> Result<RawHeader, AppError> {
     }
 }
 
-fn parse_raw_path(path: &[u8]) -> Result<(), AppError> {
-    repo_path_from_bstr(path.as_bstr())?;
-    Ok(())
+fn parse_raw_path(path: &[u8]) -> Result<RepoPath, AppError> {
+    repo_path_from_bstr(path.as_bstr()).map_err(AppError::from)
 }
 
 fn parse_object_id(operation: &'static str, oid: &[u8]) -> Result<gix::ObjectId, AppError> {
