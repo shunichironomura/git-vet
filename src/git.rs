@@ -89,27 +89,50 @@ impl Git {
     }
 
     pub(crate) fn vetter(&self) -> Result<Vetter, AppError> {
-        let config = self.repo.config_snapshot();
-        let name = config
-            .string("user.name")
-            .ok_or(AppError::MissingUserName)?;
-        let email = config
-            .string("user.email")
-            .ok_or(AppError::MissingUserEmail)?;
-        let name = name
-            .to_str()
-            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
-            .trim()
-            .to_owned();
-        let email = email
-            .to_str()
-            .map_err(|err| AppError::NonUtf8Path(err.to_string()))?
-            .trim()
-            .to_owned();
-        match (name.is_empty(), email.is_empty()) {
-            (true, _) => Err(AppError::MissingUserName),
-            (_, true) => Err(AppError::MissingUserEmail),
-            (false, false) => Ok(Vetter::new(name, email)),
+        let name = self.required_config_value(ReviewerConfigKey::UserName)?;
+        let email = self.required_config_value(ReviewerConfigKey::UserEmail)?;
+        Ok(Vetter::new(name, email))
+    }
+
+    fn required_config_value(&self, key: ReviewerConfigKey) -> Result<String, AppError> {
+        let output = self
+            .git_command()
+            .arg("config")
+            .arg("get")
+            .arg("--null")
+            .arg(key.name())
+            .output()?;
+
+        if output.status.code() == Some(1) {
+            return Err(key.missing_error());
+        }
+        if !output.status.success() {
+            return Err(git_error(
+                "reading git config",
+                command_failure_details(&output),
+            ));
+        }
+
+        let mut value = output.stdout;
+        match value.pop() {
+            Some(0) => {}
+            Some(_) | None => {
+                return Err(git_error(
+                    "reading git config",
+                    format!("expected NUL-terminated value for {}", key.name()),
+                ));
+            }
+        }
+
+        let value = String::from_utf8(value).map_err(|err| AppError::NonUtf8GitConfig {
+            key: key.name(),
+            details: err.to_string(),
+        })?;
+        let value = value.trim().to_owned();
+        if value.is_empty() {
+            Err(key.missing_error())
+        } else {
+            Ok(value)
         }
     }
 
@@ -209,6 +232,28 @@ impl Git {
                 }
             }
             None => Ok(None),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReviewerConfigKey {
+    UserName,
+    UserEmail,
+}
+
+impl ReviewerConfigKey {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::UserName => "user.name",
+            Self::UserEmail => "user.email",
+        }
+    }
+
+    const fn missing_error(self) -> AppError {
+        match self {
+            Self::UserName => AppError::MissingUserName,
+            Self::UserEmail => AppError::MissingUserEmail,
         }
     }
 }
