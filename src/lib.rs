@@ -1146,4 +1146,23 @@ mod tests {
 
         assert_eq!(parse_raw_log_new_oid(line), Some(BlobOid::new("newoid")));
     }
+
+    #[test]
+    fn relabel_no_index_diff_handles_git_prefix_variants() {
+        let baseline = Path::new("/tmp/git-vet/baseline/a.txt");
+        let current = Path::new("/tmp/git-vet/current/a.txt");
+        let path = RepoPath::from_git_path("a.txt").unwrap();
+
+        let numbered = "diff --git 1/tmp/git-vet/baseline/a.txt 2/tmp/git-vet/current/a.txt\n--- 1/tmp/git-vet/baseline/a.txt\n+++ 2/tmp/git-vet/current/a.txt\n";
+        assert_eq!(
+            relabel_no_index_diff(numbered, baseline, current, &path),
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
+        );
+
+        let lettered = "diff --git a/tmp/git-vet/baseline/a.txt b/tmp/git-vet/current/a.txt\n--- a/tmp/git-vet/baseline/a.txt\n+++ b/tmp/git-vet/current/a.txt\n";
+        assert_eq!(
+            relabel_no_index_diff(lettered, baseline, current, &path),
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
+        );
+    }
 }
