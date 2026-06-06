@@ -379,6 +379,37 @@ fn editing_and_committing_a_marked_file_makes_it_stale() {
 }
 
 #[test]
+fn rename_and_edit_uses_git_follow_history_for_stale_baseline() {
+    let repo = TestRepo::new();
+    repo.write(
+        "old.txt",
+        "line-1\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8\nline-9\nline-10\n",
+    );
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "old.txt"]).status.success());
+
+    run_git(repo.path(), ["mv", "old.txt", "new.txt"]);
+    repo.write(
+        "new.txt",
+        "line-1\nline-2\nline-3\nline-4\nline-5 changed\nline-6\nline-7\nline-8\nline-9\nline-10\n",
+    );
+    repo.commit_all("rename and edit");
+
+    let records = status_json(&repo);
+    assert!(records.iter().all(|record| record["path"] != "old.txt"));
+    let record = record_for(&records, "new.txt");
+    assert_eq!(record["state"], "stale");
+    assert!(!record["baseline"].is_null());
+    assert_eq!(record["vetted_by"]["name"], "Reviewer");
+
+    let diff = repo.run_vet(&["diff", "new.txt"]);
+    assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
+    let diff = stdout(&diff);
+    assert!(diff.contains("-line-5"), "{diff}");
+    assert!(diff.contains("+line-5 changed"), "{diff}");
+}
+
+#[test]
 fn diff_for_new_and_stale_files_shows_git_diffs() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
