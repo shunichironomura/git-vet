@@ -7,6 +7,7 @@ mod git_ref_format;
 mod git_types;
 mod notes;
 mod path;
+mod remote;
 mod review;
 mod status_output;
 mod vetignore;

@@ -110,9 +110,10 @@ Records are stored sorted/deduplicated by `git-vet`, and notes merges use the sa
 
 Notes refs are **not** pushed or fetched by default. The tool must make this easy for the selected channel:
 
-- Push: `git push <remote> refs/notes/vet/<channel>`
-- Fetch refspec: `+refs/notes/vet/<channel>:refs/notes/vet/<channel>`
-- `git vet sync --channel <channel>` wraps fetch + merge + push of this ref.
+- Push: `git push <remote> refs/notes/vet/<channel>:refs/notes/vet/<channel>`
+- Fetch through a temporary ref before merging: `+refs/notes/vet/<channel>:<temporary-notes-ref>`
+- `git vet sync [--remote <name>] --channel <channel>` wraps fetch + merge + push of this ref.
+- Remote selection is stable and not branch-upstream-dependent: explicit `--remote <name>`, then `vet.syncRemote`, then `origin`, otherwise fail.
 
 ### 5.4 Merge strategy
 
@@ -144,7 +145,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
 | `git vet unmark <paths…>` | Remove the note on the current blob of each path in the selected channel, forcing re-review. (Affects all paths sharing that blob in that channel — see §9.) |
-| `git vet sync` | Fetch, merge, and push `refs/notes/vet/<channel>`. |
+| `git vet sync [--remote <name>]` | Fetch, merge, and push `refs/notes/vet/<channel>` using the selected remote. |
 | `git vet prune` | Remove notes for blobs no longer present in the selected channel (`git notes --ref=vet/<channel> prune`). |
 
 For `mark` and `review`, targeted paths whose working-tree contents differ from `HEAD` produce a warning that git-vet signs off only committed `HEAD:<path>` bytes. Interactive users must confirm before proceeding; non-interactive use fails unless `--allow-dirty` is passed. `--allow-dirty` keeps the warning but skips the prompt.

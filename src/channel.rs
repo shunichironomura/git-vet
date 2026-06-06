@@ -82,6 +82,12 @@ pub struct NotesRef {
     name: String,
 }
 
+impl NotesRef {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.name
+    }
+}
+
 impl fmt::Display for NotesRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.name.fmt(f)

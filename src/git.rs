@@ -10,6 +10,7 @@ use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile};
 use crate::path::{
     RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr, repo_path_from_relative,
 };
+use crate::remote::{RemoteError, RemoteName, RemoteNameSource};
 use crate::review::Vetter;
 
 pub struct Git {
@@ -132,17 +133,81 @@ impl Git {
         Ok(Vetter::new(name, email))
     }
 
+    pub(crate) fn select_sync_remote(
+        &self,
+        explicit: Option<&str>,
+    ) -> Result<RemoteName, AppError> {
+        match explicit {
+            Some(remote) => self.selected_usable_remote(remote, RemoteNameSource::Cli),
+            None => self.optional_config_value("vet.syncRemote")?.map_or_else(
+                || self.origin_fallback_sync_remote(),
+                |remote| self.selected_usable_remote(&remote, RemoteNameSource::Config),
+            ),
+        }
+    }
+
+    fn origin_fallback_sync_remote(&self) -> Result<RemoteName, AppError> {
+        let remote = RemoteName::new("origin", RemoteNameSource::OriginFallback)?;
+        match self.remote_url(&remote)? {
+            Some(_) => Ok(remote),
+            None => Err(RemoteError::NoRemoteSelected.into()),
+        }
+    }
+
+    fn selected_usable_remote(
+        &self,
+        remote: &str,
+        source: RemoteNameSource,
+    ) -> Result<RemoteName, AppError> {
+        let remote = RemoteName::new(remote, source)?;
+        match self.remote_url(&remote)? {
+            Some(_) => Ok(remote),
+            None => Err(RemoteError::UnusableRemote {
+                remote: remote.to_string(),
+                name_source: source,
+                details: "remote does not exist or has no fetch URL".to_owned(),
+            }
+            .into()),
+        }
+    }
+
+    fn remote_url(&self, remote: &RemoteName) -> Result<Option<String>, AppError> {
+        let output = self
+            .git_command()
+            .arg("remote")
+            .arg("get-url")
+            .arg(remote.as_str())
+            .output()?;
+
+        if output.status.success() {
+            let url = String::from_utf8(output.stdout)
+                .map_err(|err| git_error("decoding remote URL", err))?
+                .trim()
+                .to_owned();
+            Ok((!url.is_empty()).then_some(url))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn required_config_value(&self, key: ReviewerConfigKey) -> Result<String, AppError> {
+        match self.optional_config_value(key.name())? {
+            Some(value) if !value.is_empty() => Ok(value),
+            Some(_) | None => Err(key.missing_error()),
+        }
+    }
+
+    fn optional_config_value(&self, key: &'static str) -> Result<Option<String>, AppError> {
         let output = self
             .git_command()
             .arg("config")
             .arg("get")
             .arg("--null")
-            .arg(key.name())
+            .arg(key)
             .output()?;
 
         if output.status.code() == Some(1) {
-            return Err(key.missing_error());
+            return Ok(None);
         }
         if !output.status.success() {
             return Err(git_error(
@@ -157,21 +222,17 @@ impl Git {
             Some(_) | None => {
                 return Err(git_error(
                     "reading git config",
-                    format!("expected NUL-terminated value for {}", key.name()),
+                    format!("expected NUL-terminated value for {key}"),
                 ));
             }
         }
 
-        let value = String::from_utf8(value).map_err(|err| AppError::NonUtf8GitConfig {
-            key: key.name(),
-            details: err.to_string(),
-        })?;
-        let value = value.trim().to_owned();
-        if value.is_empty() {
-            Err(key.missing_error())
-        } else {
-            Ok(value)
-        }
+        String::from_utf8(value)
+            .map(|value| Some(value.trim().to_owned()))
+            .map_err(|err| AppError::NonUtf8GitConfig {
+                key,
+                details: err.to_string(),
+            })
     }
 
     pub(crate) fn historical_blobs(

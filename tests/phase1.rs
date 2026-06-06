@@ -76,6 +76,25 @@ impl TestRepo {
         Self { dir }
     }
 
+    fn clone_from(remote: &Path) -> Self {
+        let dir = require(TestTempDir::new("git-vet-clone"), "create temp dir");
+        require(
+            fs::remove_dir_all(dir.path()),
+            "remove empty clone destination",
+        );
+        let output = Command::new("git")
+            .args(["clone", "-q", path_str(remote), path_str(dir.path())])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_PREFIX")
+            .output()
+            .unwrap_or_else(|error| fail(&format!("run git clone: {error}")));
+        assert_git_success(output);
+        run_git(dir.path(), ["config", "user.email", "reviewer@example.com"]);
+        run_git(dir.path(), ["config", "user.name", "Reviewer"]);
+        Self { dir }
+    }
+
     fn path(&self) -> &Path {
         self.dir.path()
     }
@@ -91,6 +110,25 @@ impl TestRepo {
     fn commit_all(&self, message: &str) {
         run_git(self.path(), ["add", "."]);
         run_git(self.path(), ["commit", "-q", "-m", message]);
+    }
+
+    fn add_remote(&self, name: &str, remote: &Path) {
+        run_git(self.path(), ["remote", "add", name, path_str(remote)]);
+    }
+
+    fn current_branch(&self) -> String {
+        let output = assert_git_success(git_output(self.path(), ["branch", "--show-current"]));
+        stdout(&output).trim().to_owned()
+    }
+
+    fn push_head_to(&self, remote: &str) {
+        let refspec = format!("HEAD:{}", self.current_branch());
+        run_git(self.path(), ["push", remote, refspec.as_str()]);
+    }
+
+    fn push_head_to_and_set_upstream(&self, remote: &str) {
+        let refspec = format!("HEAD:{}", self.current_branch());
+        run_git(self.path(), ["push", "-u", remote, refspec.as_str()]);
     }
 
     fn run_vet(&self, args: &[&str]) -> Output {
@@ -142,6 +180,23 @@ fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Output {
         .env_remove("GIT_PREFIX")
         .output()
         .unwrap_or_else(|error| fail(&format!("run git: {error}")))
+}
+
+fn bare_repo(prefix: &str) -> TestTempDir {
+    let dir = require(TestTempDir::new(prefix), "create bare temp dir");
+    run_git(dir.path(), ["init", "--bare", "-q"]);
+    dir
+}
+
+fn path_str(path: &Path) -> &str {
+    path.to_str()
+        .unwrap_or_else(|| fail(&format!("path is not UTF-8: {}", path.display())))
+}
+
+fn ref_exists(cwd: &Path, ref_name: &str) -> bool {
+    git_output(cwd, ["show-ref", "--verify", "--quiet", ref_name])
+        .status
+        .success()
 }
 
 fn assert_git_success(output: Output) -> Output {
@@ -793,6 +848,148 @@ fn prune_wraps_git_notes_prune() {
 
     let prune = repo.run_vet(&["prune"]);
     assert!(prune.status.success(), "prune failed: {}", stderr(&prune));
+}
+
+#[test]
+fn sync_pushes_selected_channel_notes_to_origin_fallback() {
+    let remote = bare_repo("git-vet-remote");
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    repo.add_remote("origin", remote.path());
+    repo.push_head_to("origin");
+
+    let mark = repo.run_vet(&["--channel", "security", "mark", "a.txt"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+
+    let sync = repo.run_vet(&["--channel", "security", "sync"]);
+    assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+
+    assert!(ref_exists(remote.path(), "refs/notes/vet/security"));
+    assert!(!ref_exists(remote.path(), "refs/notes/vet/default"));
+}
+
+#[test]
+fn sync_fetches_remote_notes_into_local_channel() {
+    let remote = bare_repo("git-vet-remote");
+    let first = TestRepo::new();
+    first.write("a.txt", "hello\n");
+    first.commit_all("initial");
+    first.add_remote("origin", remote.path());
+    first.push_head_to("origin");
+    assert!(first.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(first.run_vet(&["sync"]).status.success());
+
+    let second = TestRepo::clone_from(remote.path());
+    let before_sync = status_json(&second);
+    assert_eq!(record_for(&before_sync, "a.txt")["state"], "new");
+
+    let sync = second.run_vet(&["sync"]);
+    assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+
+    let after_sync = status_json(&second);
+    assert_eq!(record_for(&after_sync, "a.txt")["state"], "vetted");
+}
+
+#[test]
+fn sync_unions_concurrent_note_records_without_persistent_merge_config() {
+    let remote = bare_repo("git-vet-remote");
+    let base = TestRepo::new();
+    base.write("a.txt", "hello\n");
+    base.commit_all("initial");
+    base.add_remote("origin", remote.path());
+    base.push_head_to("origin");
+
+    let first = TestRepo::clone_from(remote.path());
+    let second = TestRepo::clone_from(remote.path());
+    run_git(
+        second.path(),
+        ["config", "user.email", "second@example.com"],
+    );
+    run_git(second.path(), ["config", "user.name", "Second Reviewer"]);
+
+    assert!(first.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(second.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(first.run_vet(&["sync"]).status.success());
+    let second_sync = second.run_vet(&["sync"]);
+    assert!(
+        second_sync.status.success(),
+        "second sync failed: {}",
+        stderr(&second_sync)
+    );
+    let first_sync_again = first.run_vet(&["sync"]);
+    assert!(
+        first_sync_again.status.success(),
+        "first sync failed: {}",
+        stderr(&first_sync_again)
+    );
+
+    let note = assert_git_success(git_output(
+        first.path(),
+        ["notes", "--ref=vet/default", "show", "HEAD:a.txt"],
+    ));
+    let note = stdout(&note);
+    assert!(note.contains("reviewer@example.com"), "{note}");
+    assert!(note.contains("second@example.com"), "{note}");
+
+    let strategy = git_output(
+        first.path(),
+        ["config", "--local", "--get", "notes.mergeStrategy"],
+    );
+    assert_eq!(strategy.status.code(), Some(1));
+}
+
+#[test]
+fn sync_remote_selection_uses_explicit_then_config_then_origin_without_branch_upstream() {
+    let origin = bare_repo("git-vet-origin");
+    let upstream = bare_repo("git-vet-upstream");
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    repo.add_remote("origin", origin.path());
+    repo.add_remote("upstream", upstream.path());
+    repo.push_head_to("origin");
+    repo.push_head_to_and_set_upstream("upstream");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let sync = repo.run_vet(&["sync"]);
+    assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+    assert!(ref_exists(origin.path(), "refs/notes/vet/default"));
+    assert!(!ref_exists(upstream.path(), "refs/notes/vet/default"));
+
+    run_git(repo.path(), ["config", "vet.syncRemote", "upstream"]);
+    let sync = repo.run_vet(&["sync"]);
+    assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+    assert!(ref_exists(upstream.path(), "refs/notes/vet/default"));
+
+    assert!(
+        repo.run_vet(&["--channel", "explicit", "mark", "a.txt"])
+            .status
+            .success()
+    );
+    let explicit = repo.run_vet(&["--channel", "explicit", "sync", "--remote", "origin"]);
+    assert!(
+        explicit.status.success(),
+        "explicit sync failed: {}",
+        stderr(&explicit)
+    );
+    assert!(ref_exists(origin.path(), "refs/notes/vet/explicit"));
+    assert!(!ref_exists(upstream.path(), "refs/notes/vet/explicit"));
+}
+
+#[test]
+fn sync_without_selected_remote_exits_two_with_diagnostic() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let sync = repo.run_vet(&["sync"]);
+    assert_eq!(sync.status.code(), Some(2));
+    let stderr = stderr(&sync);
+    assert!(stderr.contains("no remote selected"), "{stderr}");
+    assert!(stderr.contains("--remote"), "{stderr}");
+    assert!(stderr.contains("vet.syncRemote"), "{stderr}");
+    assert!(stderr.contains("origin"), "{stderr}");
 }
 
 #[test]

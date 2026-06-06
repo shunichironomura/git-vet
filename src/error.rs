@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::channel::ChannelError;
 use crate::path::{PathError, RepoPath};
+use crate::remote::RemoteError;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -40,6 +41,8 @@ pub enum AppError {
     DirtyPathsDeclined,
     #[error("invalid review channel {channel:?}: {details}")]
     InvalidChannel { channel: String, details: String },
+    #[error("sync remote error: {0}")]
+    Remote(#[from] RemoteError),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
