@@ -1,3 +1,10 @@
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unused_self,
+    reason = "Existing integration tests use panicking helpers until test error handling is refactored"
+)]
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
