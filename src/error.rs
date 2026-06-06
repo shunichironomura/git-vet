@@ -32,6 +32,12 @@ pub enum AppError {
     MissingUserEmail,
     #[error("git config {key} is not valid UTF-8: {details}")]
     NonUtf8GitConfig { key: &'static str, details: String },
+    #[error(
+        "target paths have uncommitted working-tree changes; rerun with --allow-dirty to proceed with committed HEAD contents"
+    )]
+    DirtyPathsRequireAllowDirty,
+    #[error("aborted because target paths have uncommitted working-tree changes")]
+    DirtyPathsDeclined,
     #[error("invalid review channel {channel:?}: {details}")]
     InvalidChannel { channel: String, details: String },
     #[error("I/O error: {0}")]

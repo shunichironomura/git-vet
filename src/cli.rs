@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
-use crate::commands::{Gate, StatusMode, diff_path, mark_paths, status, unmark_paths};
+use crate::commands::{
+    DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, unmark_paths,
+};
 use crate::error::AppError;
 use crate::git::Git;
 use crate::git_ref_format::{CheckRefFormatError, check_ref_format};
@@ -28,6 +30,9 @@ pub struct Cli {
 enum CommandKind {
     /// Sign off the current HEAD content of tracked files.
     Mark {
+        /// Proceed even if target paths have uncommitted working-tree changes.
+        #[arg(long)]
+        allow_dirty: bool,
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
@@ -58,8 +63,13 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
     let notes = GitNotesStore::new(&git, channel.notes_ref().clone());
 
     match cli.command {
-        CommandKind::Mark { paths } => {
-            mark_paths(&git, &notes, &paths)?;
+        CommandKind::Mark { paths, allow_dirty } => {
+            let dirty_paths = if allow_dirty {
+                DirtyPathHandling::Allow
+            } else {
+                DirtyPathHandling::Prompt
+            };
+            mark_paths(&git, &notes, &paths, MarkOptions { dirty_paths })?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Unmark { paths } => {

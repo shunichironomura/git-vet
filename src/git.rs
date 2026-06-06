@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -86,6 +87,43 @@ impl Git {
             .head_id()
             .map(|id| CommitOid::new(id.detach()))
             .map_err(|err| git_error("reading HEAD", err))
+    }
+
+    pub(crate) fn dirty_paths_against_head(
+        &self,
+        files: &[TrackedFile],
+    ) -> Result<Vec<RepoPath>, AppError> {
+        let dirty_paths = files.iter().try_fold(BTreeSet::new(), |mut dirty, file| {
+            if self.path_has_worktree_changes_against_head(&file.path)? {
+                dirty.insert(file.path.clone());
+            }
+            Ok::<_, AppError>(dirty)
+        })?;
+        Ok(dirty_paths.into_iter().collect())
+    }
+
+    fn path_has_worktree_changes_against_head(&self, path: &RepoPath) -> Result<bool, AppError> {
+        let output = self
+            .git_command()
+            .arg("-c")
+            .arg("core.fileMode=false")
+            .arg("diff")
+            .arg("--quiet")
+            .arg("--no-ext-diff")
+            .arg("--no-textconv")
+            .arg("HEAD")
+            .arg("--")
+            .arg(path.to_path_buf())
+            .output()?;
+
+        match output.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            _ => Err(git_error(
+                "checking working-tree changes",
+                command_failure_details(&output),
+            )),
+        }
     }
 
     pub(crate) fn vetter(&self) -> Result<Vetter, AppError> {

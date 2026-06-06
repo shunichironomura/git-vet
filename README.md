@@ -29,6 +29,9 @@ git vet diff src/lib.rs
 # Mark the file's current HEAD content as vetted
 git vet mark src/lib.rs
 
+# If the working tree is dirty, intentionally mark only the committed HEAD content
+git vet mark --allow-dirty src/lib.rs
+
 # Force the current HEAD content to be reviewed again
 git vet unmark src/lib.rs
 
@@ -36,7 +39,7 @@ git vet unmark src/lib.rs
 git vet status --check
 ```
 
-`git-vet` looks at committed `HEAD` contents only. Untracked files and uncommitted working-tree edits are not vetted or gated.
+`git-vet` looks at committed `HEAD` contents only. Untracked files and uncommitted working-tree edits are not vetted or gated. `git vet mark` warns and asks before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
 
 ## States
 
@@ -54,7 +57,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet status --json` — emit stable JSON.
 - `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
 - `git vet diff <path>` — show the diff that still needs vetting.
-- `git vet mark <paths...>` — mark current `HEAD` contents as vetted.
+- `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet prune` — prune stale Git-note entries.
 

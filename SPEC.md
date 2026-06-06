@@ -138,14 +138,16 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 
 | Command | Behavior |
 |---|---|
-| `git vet mark <paths…>` | Sign off the current blob of each path in the selected channel: append a review record note in `refs/notes/vet/<channel>` keyed on `HEAD:<path>`. Idempotent. |
+| `git vet mark [--allow-dirty] <paths…>` | Sign off the current blob of each path in the selected channel: append a review record note in `refs/notes/vet/<channel>` keyed on `HEAD:<path>`. Idempotent. |
 | `git vet status [--json] [--check]` | Classify every in-scope tracked file (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. |
 | `git vet diff <path>` | Show the change that still needs review for `<path>` in the selected channel: the cumulative diff from its last-reviewed version to `HEAD` (§7.2). |
-| `git vet review <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
+| `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
 | `git vet unmark <paths…>` | Remove the note on the current blob of each path in the selected channel, forcing re-review. (Affects all paths sharing that blob in that channel — see §9.) |
 | `git vet sync` | Fetch, merge, and push `refs/notes/vet/<channel>`. |
 | `git vet prune` | Remove notes for blobs no longer present in the selected channel (`git notes --ref=vet/<channel> prune`). |
+
+For `mark` and `review`, targeted paths whose working-tree contents differ from `HEAD` produce a warning that git-vet signs off only committed `HEAD:<path>` bytes. Interactive users must confirm before proceeding; non-interactive use fails unless `--allow-dirty` is passed. `--allow-dirty` keeps the warning but skips the prompt.
 
 ### 6.1 `status` output modes
 
