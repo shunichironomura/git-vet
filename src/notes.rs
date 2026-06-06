@@ -6,6 +6,7 @@ use crate::channel::NotesRef;
 use crate::error::{AppError, git_error};
 use crate::git::Git;
 use crate::git_types::BlobOid;
+use crate::remote::RemoteName;
 use crate::review::{ReviewInfo, ReviewedSet, parse_note_records};
 
 pub trait NotesStore {
@@ -54,6 +55,123 @@ impl<'git> GitNotesStore<'git> {
             ["notes", ref_arg.as_str(), "show", oid_arg.as_str()],
         )?;
         String::from_utf8(stdout).map_err(|err| git_error("decoding note body", err))
+    }
+
+    pub(crate) fn sync(&self, remote: &RemoteName) -> Result<(), AppError> {
+        let notes_ref = self.notes_ref.as_str();
+        let temp_ref = sync_temp_ref(notes_ref)?;
+        let remote_has_notes = self.remote_ref_exists(remote, notes_ref)?;
+
+        match remote_has_notes {
+            true => {
+                let result = self
+                    .fetch_remote_notes(remote, notes_ref, &temp_ref)
+                    .and_then(|()| {
+                        self.merge_notes_ref(&temp_ref)?;
+                        self.push_notes_ref(remote, notes_ref)
+                    });
+                let cleanup_result = self.delete_ref(&temp_ref);
+                result.and(cleanup_result)?;
+            }
+            false if self.local_ref_exists(notes_ref)? => {
+                self.push_notes_ref(remote, notes_ref)?;
+            }
+            false => {}
+        }
+
+        Ok(())
+    }
+
+    fn remote_ref_exists(&self, remote: &RemoteName, ref_name: &str) -> Result<bool, AppError> {
+        let output = self
+            .git_command()
+            .arg("ls-remote")
+            .arg("--exit-code")
+            .arg(remote.as_str())
+            .arg(ref_name)
+            .output()?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(2) => Ok(false),
+            _ => Err(git_error(
+                "checking remote notes ref",
+                command_failure_details(&output),
+            )),
+        }
+    }
+
+    fn local_ref_exists(&self, ref_name: &str) -> Result<bool, AppError> {
+        let output = self
+            .git_command()
+            .arg("show-ref")
+            .arg("--verify")
+            .arg("--quiet")
+            .arg(ref_name)
+            .output()?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(git_error(
+                "checking local notes ref",
+                command_failure_details(&output),
+            )),
+        }
+    }
+
+    fn fetch_remote_notes(
+        &self,
+        remote: &RemoteName,
+        notes_ref: &str,
+        temp_ref: &str,
+    ) -> Result<(), AppError> {
+        let refspec = format!("+{notes_ref}:{temp_ref}");
+        self.git_output(
+            "fetching remote notes ref",
+            ["fetch", "--no-tags", remote.as_str(), refspec.as_str()],
+        )?;
+        Ok(())
+    }
+
+    fn merge_notes_ref(&self, merge_ref: &str) -> Result<(), AppError> {
+        let ref_arg = self.notes_ref_arg();
+        self.git_output(
+            "merging git notes",
+            [
+                "notes",
+                ref_arg.as_str(),
+                "merge",
+                "-s",
+                "cat_sort_uniq",
+                merge_ref,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn push_notes_ref(&self, remote: &RemoteName, notes_ref: &str) -> Result<(), AppError> {
+        let refspec = format!("{notes_ref}:{notes_ref}");
+        self.git_output(
+            "pushing notes ref",
+            ["push", remote.as_str(), refspec.as_str()],
+        )?;
+        Ok(())
+    }
+
+    fn delete_ref(&self, ref_name: &str) -> Result<(), AppError> {
+        let output = self
+            .git_command()
+            .arg("update-ref")
+            .arg("-d")
+            .arg(ref_name)
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(git_error(
+                "deleting temporary sync notes ref",
+                command_failure_details(&output),
+            ))
+        }
     }
 
     fn notes_ref_arg(&self) -> String {
@@ -176,6 +294,18 @@ impl NotesStore for GitNotesStore<'_> {
         self.git_output("pruning git notes", ["notes", ref_arg.as_str(), "prune"])?;
         Ok(())
     }
+}
+
+fn sync_temp_ref(notes_ref: &str) -> Result<String, AppError> {
+    notes_ref
+        .strip_prefix("refs/notes/vet/")
+        .map(|channel| format!("refs/notes/vet-sync/{channel}"))
+        .ok_or_else(|| {
+            git_error(
+                "building temporary sync notes ref",
+                format!("notes ref {notes_ref:?} does not start with refs/notes/vet/"),
+            )
+        })
 }
 
 fn parse_note_list_entry(line: &str) -> Result<NoteListEntry, AppError> {

@@ -52,6 +52,12 @@ enum CommandKind {
     },
     /// Show the diff that still needs review for a tracked file.
     Diff { path: PathBuf },
+    /// Fetch, merge, and push review notes for the selected channel.
+    Sync {
+        /// Remote to sync with. Overrides vet.syncRemote and origin fallback.
+        #[arg(long)]
+        remote: Option<String>,
+    },
     /// Prune notes for objects that are no longer present.
     Prune,
 }
@@ -84,6 +90,11 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
         }
         CommandKind::Diff { path } => {
             diff_path(&git, &notes, &path)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        CommandKind::Sync { remote } => {
+            let remote = git.select_sync_remote(remote.as_deref())?;
+            notes.sync(&remote)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Prune => {
