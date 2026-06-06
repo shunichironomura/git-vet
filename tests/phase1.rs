@@ -237,6 +237,61 @@ fn mark_makes_a_file_vetted() {
 }
 
 #[test]
+fn unmark_makes_a_vetted_file_new() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let unmark = repo.run_vet(&["unmark", "a.txt"]);
+    assert!(
+        unmark.status.success(),
+        "unmark failed: {}",
+        stderr(&unmark)
+    );
+    assert!(stdout(&unmark).contains("unmarked a.txt"));
+    assert!(stderr(&unmark).contains("blob-keyed"));
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "new");
+    assert!(record["baseline"].is_null());
+    assert!(record["last_vetted_at"].is_null());
+    assert!(record["vetted_by"].is_null());
+
+    let note = git_output(
+        repo.path(),
+        ["notes", "--ref=vet/default", "show", "HEAD:a.txt"],
+    );
+    assert!(!note.status.success());
+}
+
+#[test]
+fn unmark_makes_a_vetted_file_stale_when_an_older_blob_was_reviewed() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    repo.write("a.txt", "hello\nworld\n");
+    repo.commit_all("edit");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let unmark = repo.run_vet(&["unmark", "a.txt"]);
+    assert!(
+        unmark.status.success(),
+        "unmark failed: {}",
+        stderr(&unmark)
+    );
+
+    let records = status_json(&repo);
+    let record = record_for(&records, "a.txt");
+    assert_eq!(record["state"], "stale");
+    assert!(!record["baseline"].is_null());
+    assert_eq!(record["vetted_by"]["name"], "Reviewer");
+    assert_eq!(record["vetted_by"]["email"], "reviewer@example.com");
+}
+
+#[test]
 fn mark_requires_git_config_user_name() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
@@ -392,6 +447,35 @@ fn review_channels_are_independent() {
 }
 
 #[test]
+fn unmark_channels_are_independent() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(
+        repo.run_vet(&["--channel", "security", "mark", "a.txt"])
+            .status
+            .success()
+    );
+
+    let unmark_default = repo.run_vet(&["unmark", "a.txt"]);
+    assert!(
+        unmark_default.status.success(),
+        "default unmark failed: {}",
+        stderr(&unmark_default)
+    );
+
+    let default_records = status_json(&repo);
+    let default_record = record_for(&default_records, "a.txt");
+    assert_eq!(default_record["state"], "new");
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    let security_record = record_for(&security_records, "a.txt");
+    assert_eq!(security_record["state"], "vetted");
+}
+
+#[test]
 fn status_check_is_channel_specific() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
@@ -445,6 +529,31 @@ fn valid_channel_names_can_contain_slashes() {
 
     let document = status_json_document(&repo, &["status", "--json", "--channel", "team/security"]);
     assert_eq!(document["channel"], "team/security");
+}
+
+#[test]
+fn unmark_affects_all_identical_content_paths_in_the_channel() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "same\n");
+    repo.write("b.txt", "same\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let records = status_json(&repo);
+    assert_eq!(record_for(&records, "a.txt")["state"], "vetted");
+    assert_eq!(record_for(&records, "b.txt")["state"], "vetted");
+
+    let unmark = repo.run_vet(&["unmark", "b.txt"]);
+    assert!(
+        unmark.status.success(),
+        "unmark failed: {}",
+        stderr(&unmark)
+    );
+    assert!(stderr(&unmark).contains("sharing the same current content"));
+
+    let records = status_json(&repo);
+    assert_eq!(record_for(&records, "a.txt")["state"], "new");
+    assert_eq!(record_for(&records, "b.txt")["state"], "new");
 }
 
 #[test]
@@ -608,9 +717,17 @@ fn untracked_or_missing_paths_exit_two() {
     assert_eq!(untracked.status.code(), Some(2));
     assert!(stderr(&untracked).contains("not tracked"));
 
+    let unmark_untracked = repo.run_vet(&["unmark", "untracked.txt"]);
+    assert_eq!(unmark_untracked.status.code(), Some(2));
+    assert!(stderr(&unmark_untracked).contains("not tracked"));
+
     let missing = repo.run_vet(&["diff", "missing.txt"]);
     assert_eq!(missing.status.code(), Some(2));
     assert!(stderr(&missing).contains("not tracked"));
+
+    let unmark_missing = repo.run_vet(&["unmark", "missing.txt"]);
+    assert_eq!(unmark_missing.status.code(), Some(2));
+    assert!(stderr(&unmark_missing).contains("not tracked"));
 }
 
 #[test]

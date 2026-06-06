@@ -29,6 +29,9 @@ git vet diff src/lib.rs
 # Mark the file's current HEAD content as vetted
 git vet mark src/lib.rs
 
+# Force the current HEAD content to be reviewed again
+git vet unmark src/lib.rs
+
 # Gate a release/CI job: exits 1 if any in-scope file is not vetted
 git vet status --check
 ```
@@ -52,6 +55,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
 - `git vet diff <path>` — show the diff that still needs vetting.
 - `git vet mark <paths...>` — mark current `HEAD` contents as vetted.
+- `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet prune` — prune stale Git-note entries.
 
 All commands accept `--channel <name>` to use an independent vetting channel instead of `default`:
@@ -72,4 +76,4 @@ Cargo.lock
 
 ## Notes
 
-Vetting state is stored in Git notes under `refs/notes/vet/<channel>`. Because it is blob-keyed, identical file contents share vetting state within a channel, and renaming an unchanged file keeps it vetted.
+Vetting state is stored in Git notes under `refs/notes/vet/<channel>`. Because it is blob-keyed, identical file contents share vetting state within a channel, and renaming an unchanged file keeps it vetted. Unmarking a blob also affects all paths with identical content in that channel.

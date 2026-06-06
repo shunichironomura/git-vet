@@ -12,7 +12,14 @@ pub trait NotesStore {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError>;
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError>;
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError>;
+    fn remove_note(&self, oid: &BlobOid) -> Result<NoteRemoval, AppError>;
     fn prune(&self) -> Result<(), AppError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoteRemoval {
+    Removed,
+    Absent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,6 +151,24 @@ impl NotesStore for GitNotesStore<'_> {
             body,
         )?;
         Ok(())
+    }
+
+    fn remove_note(&self, oid: &BlobOid) -> Result<NoteRemoval, AppError> {
+        if self
+            .note_entries()?
+            .into_iter()
+            .any(|entry| entry.annotated == *oid)
+        {
+            let ref_arg = self.notes_ref_arg();
+            let oid_arg = oid.to_string();
+            self.git_output(
+                "removing git note",
+                ["notes", ref_arg.as_str(), "remove", oid_arg.as_str()],
+            )?;
+            Ok(NoteRemoval::Removed)
+        } else {
+            Ok(NoteRemoval::Absent)
+        }
     }
 
     fn prune(&self) -> Result<(), AppError> {
