@@ -44,8 +44,11 @@ pub fn mark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Resu
             commit,
             path: file.path.clone(),
         };
-        let body = append_record(notes.note_body(&file.blob)?.as_deref(), &record)?;
-        notes.write_note_body(&file.blob, &body)?;
+        let existing = notes.note_body(&file.blob)?;
+        let body = append_record(existing.as_deref(), &record)?;
+        if existing.as_deref() != Some(body.as_str()) {
+            notes.write_note_body(&file.blob, &body)?;
+        }
         stdout_line(format_args!("marked {}", file.path))
     })
 }

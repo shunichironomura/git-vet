@@ -32,8 +32,6 @@ pub enum AppError {
     MissingUserEmail,
     #[error("invalid review channel {channel:?}: {details}")]
     InvalidChannel { channel: String, details: String },
-    #[error("notes ref points to a {actual}; expected a commit")]
-    InvalidNotesRefTarget { actual: &'static str },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
