@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
-use crate::commands::{Gate, StatusMode, diff_path, mark_paths, status};
+use crate::commands::{Gate, StatusMode, diff_path, mark_paths, status, unmark_paths};
 use crate::error::AppError;
 use crate::git::Git;
 use crate::git_ref_format::{CheckRefFormatError, check_ref_format};
@@ -28,6 +28,11 @@ pub struct Cli {
 enum CommandKind {
     /// Sign off the current HEAD content of tracked files.
     Mark {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Remove sign-off for the current HEAD content of tracked files.
+    Unmark {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
@@ -55,6 +60,10 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
     match cli.command {
         CommandKind::Mark { paths } => {
             mark_paths(&git, &notes, &paths)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        CommandKind::Unmark { paths } => {
+            unmark_paths(&git, &notes, &paths)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Status { json, check } => {

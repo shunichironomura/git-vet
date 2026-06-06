@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -6,8 +7,8 @@ use chrono::{SecondsFormat, Utc};
 use crate::channel::ReviewChannel;
 use crate::error::AppError;
 use crate::git::Git;
-use crate::git_types::TrackedFile;
-use crate::notes::NotesStore;
+use crate::git_types::{BlobOid, TrackedFile};
+use crate::notes::{NoteRemoval, NotesStore};
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
 use crate::status_output::{human_status, json_status};
 use crate::vetignore::Vetignore;
@@ -51,6 +52,36 @@ pub fn mark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Resu
         }
         stdout_line(format_args!("marked {}", file.path))
     })
+}
+
+pub fn unmark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Result<(), AppError> {
+    let paths = paths
+        .iter()
+        .map(|path| git.normalize_user_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let targets = paths
+        .iter()
+        .map(|path| git.blob_at_head(path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    stderr_line(format_args!(
+        "warning: unmarking is blob-keyed; all paths sharing the same current content are affected in this channel"
+    ))?;
+
+    let removals = targets
+        .iter()
+        .map(|file| file.blob)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|blob| notes.remove_note(&blob).map(|removal| (blob, removal)))
+        .collect::<Result<BTreeMap<BlobOid, NoteRemoval>, _>>()?;
+
+    targets
+        .iter()
+        .try_for_each(|file| match removals[&file.blob] {
+            NoteRemoval::Removed => stdout_line(format_args!("unmarked {}", file.path)),
+            NoteRemoval::Absent => stdout_line(format_args!("{} was not marked", file.path)),
+        })
 }
 
 pub fn status(
@@ -124,6 +155,13 @@ fn stdout_line(args: std::fmt::Arguments<'_>) -> Result<(), AppError> {
 
 fn stdout_str(output: &str) -> Result<(), AppError> {
     io::stdout().lock().write_all(output.as_bytes())?;
+    Ok(())
+}
+
+fn stderr_line(args: std::fmt::Arguments<'_>) -> Result<(), AppError> {
+    let mut stderr = io::stderr().lock();
+    stderr.write_fmt(args)?;
+    stderr.write_all(b"\n")?;
     Ok(())
 }
 
