@@ -956,6 +956,15 @@ fn sync_pushes_selected_channel_notes_to_origin_fallback() {
 
     let sync = repo.run_vet(&["--channel", "security", "sync"]);
     assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+    let sync_stderr = stderr(&sync);
+    assert!(
+        sync_stderr.contains("✓ Pushed review notes for channel security via origin"),
+        "{sync_stderr}"
+    );
+    assert!(
+        sync_stderr.contains("result: pushed local notes; remote ref did not exist"),
+        "{sync_stderr}"
+    );
 
     assert!(ref_exists(remote.path(), "refs/notes/vet/security"));
     assert!(!ref_exists(remote.path(), "refs/notes/vet/default"));
@@ -978,9 +987,41 @@ fn sync_fetches_remote_notes_into_local_channel() {
 
     let sync = second.run_vet(&["sync"]);
     assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+    let sync_stderr = stderr(&sync);
+    assert!(
+        sync_stderr.contains("✓ Synced review notes for channel default via origin"),
+        "{sync_stderr}"
+    );
+    assert!(
+        sync_stderr.contains("result: fetched, merged, and pushed"),
+        "{sync_stderr}"
+    );
 
     let after_sync = status_json(&second);
     assert_eq!(record_for(&after_sync, "a.txt")["state"], "vetted");
+}
+
+#[test]
+fn sync_prints_noop_summary_when_no_notes_exist() {
+    let remote = bare_repo("git-vet-remote");
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    repo.add_remote("origin", remote.path());
+    repo.push_head_to("origin");
+
+    let sync = repo.run_vet(&["sync"]);
+    assert!(sync.status.success(), "sync failed: {}", stderr(&sync));
+    let sync_stderr = stderr(&sync);
+    assert!(
+        sync_stderr.contains("✓ No review notes to sync for channel default via origin"),
+        "{sync_stderr}"
+    );
+    assert!(
+        sync_stderr.contains("result: nothing to sync"),
+        "{sync_stderr}"
+    );
+    assert!(!ref_exists(remote.path(), "refs/notes/vet/default"));
 }
 
 #[test]

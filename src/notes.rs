@@ -57,38 +57,21 @@ impl<'git> GitNotesStore<'git> {
         String::from_utf8(stdout).map_err(|err| git_error("decoding note body", err))
     }
 
-    pub(crate) fn sync(&self, remote: &RemoteName) -> Result<(), AppError> {
-        let notes_ref = self.notes_ref.as_str();
-        let temp_ref = sync_temp_ref(notes_ref)?;
-        let remote_has_notes = self.remote_ref_exists(remote, notes_ref)?;
-
-        match remote_has_notes {
-            true => {
-                let result = self
-                    .fetch_remote_notes(remote, notes_ref, &temp_ref)
-                    .and_then(|()| {
-                        self.merge_notes_ref(&temp_ref)?;
-                        self.push_notes_ref(remote, notes_ref)
-                    });
-                let cleanup_result = self.delete_ref(&temp_ref);
-                result.and(cleanup_result)?;
-            }
-            false if self.local_ref_exists(notes_ref)? => {
-                self.push_notes_ref(remote, notes_ref)?;
-            }
-            false => {}
-        }
-
-        Ok(())
+    pub(crate) const fn notes_ref(&self) -> &NotesRef {
+        &self.notes_ref
     }
 
-    fn remote_ref_exists(&self, remote: &RemoteName, ref_name: &str) -> Result<bool, AppError> {
+    pub(crate) fn sync_temp_ref(&self) -> Result<String, AppError> {
+        sync_temp_ref(self.notes_ref.as_str())
+    }
+
+    pub(crate) fn remote_ref_exists(&self, remote: &RemoteName) -> Result<bool, AppError> {
         let output = self
             .git_command()
             .arg("ls-remote")
             .arg("--exit-code")
             .arg(remote.as_str())
-            .arg(ref_name)
+            .arg(self.notes_ref.as_str())
             .output()?;
         match output.status.code() {
             Some(0) => Ok(true),
@@ -100,13 +83,13 @@ impl<'git> GitNotesStore<'git> {
         }
     }
 
-    fn local_ref_exists(&self, ref_name: &str) -> Result<bool, AppError> {
+    pub(crate) fn local_ref_exists(&self) -> Result<bool, AppError> {
         let output = self
             .git_command()
             .arg("show-ref")
             .arg("--verify")
             .arg("--quiet")
-            .arg(ref_name)
+            .arg(self.notes_ref.as_str())
             .output()?;
         match output.status.code() {
             Some(0) => Ok(true),
@@ -118,13 +101,12 @@ impl<'git> GitNotesStore<'git> {
         }
     }
 
-    fn fetch_remote_notes(
+    pub(crate) fn fetch_remote_notes(
         &self,
         remote: &RemoteName,
-        notes_ref: &str,
         temp_ref: &str,
     ) -> Result<(), AppError> {
-        let refspec = format!("+{notes_ref}:{temp_ref}");
+        let refspec = format!("+{}:{temp_ref}", self.notes_ref);
         self.git_output(
             "fetching remote notes ref",
             ["fetch", "--no-tags", remote.as_str(), refspec.as_str()],
@@ -132,7 +114,7 @@ impl<'git> GitNotesStore<'git> {
         Ok(())
     }
 
-    fn merge_notes_ref(&self, merge_ref: &str) -> Result<(), AppError> {
+    pub(crate) fn merge_notes_ref(&self, merge_ref: &str) -> Result<(), AppError> {
         let ref_arg = self.notes_ref_arg();
         self.git_output(
             "merging git notes",
@@ -148,8 +130,8 @@ impl<'git> GitNotesStore<'git> {
         Ok(())
     }
 
-    fn push_notes_ref(&self, remote: &RemoteName, notes_ref: &str) -> Result<(), AppError> {
-        let refspec = format!("{notes_ref}:{notes_ref}");
+    pub(crate) fn push_notes_ref(&self, remote: &RemoteName) -> Result<(), AppError> {
+        let refspec = format!("{}:{}", self.notes_ref, self.notes_ref);
         self.git_output(
             "pushing notes ref",
             ["push", remote.as_str(), refspec.as_str()],
@@ -157,7 +139,7 @@ impl<'git> GitNotesStore<'git> {
         Ok(())
     }
 
-    fn delete_ref(&self, ref_name: &str) -> Result<(), AppError> {
+    pub(crate) fn delete_ref(&self, ref_name: &str) -> Result<(), AppError> {
         let output = self
             .git_command()
             .arg("update-ref")

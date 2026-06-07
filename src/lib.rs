@@ -10,6 +10,7 @@ mod path;
 mod remote;
 mod review;
 mod status_output;
+mod sync_progress;
 mod vetignore;
 
 pub use cli::{Cli, run_cli};

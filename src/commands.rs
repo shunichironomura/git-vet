@@ -9,10 +9,12 @@ use crate::channel::ReviewChannel;
 use crate::error::AppError;
 use crate::git::{Git, HistoryChange, HistoryChangeStatus};
 use crate::git_types::{BlobOid, TrackedFile};
-use crate::notes::{NoteRemoval, NotesStore};
+use crate::notes::{GitNotesStore, NoteRemoval, NotesStore};
 use crate::path::RepoPath;
+use crate::remote::RemoteName;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
 use crate::status_output::{HumanStatusOptions, check_status, human_status, json_status};
+use crate::sync_progress::{SyncContext, SyncOutcome, SyncProgress, SyncReport, SyncStep};
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
@@ -166,6 +168,87 @@ pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), 
         ReviewState::Vetted => stdout_line(format_args!("{path} is up to date")),
         ReviewState::New => git.diff_empty_to_head(&file),
         ReviewState::Stale { baseline } => git.diff_blobs(&baseline, &file.blob),
+    }
+}
+
+pub fn sync_notes(
+    notes: &GitNotesStore<'_>,
+    channel: &ReviewChannel,
+    remote: &RemoteName,
+    progress: &mut impl SyncProgress,
+) -> Result<SyncReport, AppError> {
+    progress.started(&SyncContext {
+        channel,
+        remote,
+        notes_ref: notes.notes_ref(),
+    })?;
+
+    let remote_has_notes = run_sync_step(progress, SyncStep::CheckRemote, || {
+        notes.remote_ref_exists(remote)
+    })?;
+
+    let outcome = match remote_has_notes {
+        true => sync_existing_remote_notes(notes, remote, progress)?,
+        false if run_sync_step(progress, SyncStep::CheckLocal, || notes.local_ref_exists())? => {
+            run_sync_step(progress, SyncStep::Push, || notes.push_notes_ref(remote))?;
+            SyncOutcome::PushedLocalOnly
+        }
+        false => SyncOutcome::NothingToSync,
+    };
+
+    let report = SyncReport {
+        channel: channel.clone(),
+        remote: remote.clone(),
+        notes_ref: notes.notes_ref().clone(),
+        outcome,
+    };
+    progress.finished(&report)?;
+    Ok(report)
+}
+
+fn sync_existing_remote_notes(
+    notes: &GitNotesStore<'_>,
+    remote: &RemoteName,
+    progress: &mut impl SyncProgress,
+) -> Result<SyncOutcome, AppError> {
+    let temp_ref = notes.sync_temp_ref()?;
+    let sync_result: Result<SyncOutcome, AppError> = (|| {
+        run_sync_step(progress, SyncStep::Fetch, || {
+            notes.fetch_remote_notes(remote, &temp_ref)
+        })?;
+        run_sync_step(progress, SyncStep::Merge, || {
+            notes.merge_notes_ref(&temp_ref)
+        })?;
+        run_sync_step(progress, SyncStep::Push, || notes.push_notes_ref(remote))?;
+        Ok(SyncOutcome::FetchedMergedPushed)
+    })();
+    match sync_result {
+        Ok(outcome) => {
+            run_sync_step(progress, SyncStep::Cleanup, || notes.delete_ref(&temp_ref))?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            let _cleanup_result = notes.delete_ref(&temp_ref);
+            Err(error)
+        }
+    }
+}
+
+fn run_sync_step<T>(
+    progress: &mut impl SyncProgress,
+    step: SyncStep,
+    action: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    progress.step_started(step)?;
+    match action() {
+        Ok(value) => {
+            progress.step_finished(step)?;
+            Ok(value)
+        }
+        Err(error) => {
+            progress.step_failed(step)?;
+            Err(error)
+        }
     }
 }
 
