@@ -65,11 +65,18 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet prune` — prune stale Git-note entries.
 
-All commands accept `--channel <name>` to use an independent vetting channel instead of `default`:
+All commands accept `--channel <name>` to use an independent vetting channel instead of the configured default:
 
 ```sh
 git vet --channel security status
 git vet --channel security mark src/lib.rs
+```
+
+Without `--channel`, `git-vet` uses `git config vet.channel` when set, otherwise `default`:
+
+```sh
+git config vet.channel security
+git vet status # uses security
 ```
 
 ## Ignoring files

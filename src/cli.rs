@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
+use crate::channel::{ChannelError, DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
 use crate::commands::{
     DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, sync_notes,
     unmark_paths,
@@ -22,8 +22,8 @@ use crate::sync_progress::SyncProgressReporter;
 )]
 pub struct Cli {
     /// Review channel/pipeline to read or write.
-    #[arg(long, global = true, default_value = DEFAULT_REVIEW_CHANNEL)]
-    channel: String,
+    #[arg(long, global = true)]
+    channel: Option<String>,
     #[command(subcommand)]
     command: CommandKind,
 }
@@ -69,8 +69,8 @@ enum CommandKind {
 
 pub fn run_cli() -> Result<ExitCode, AppError> {
     let cli = Cli::parse();
-    let channel = review_channel_from_cli(&cli.channel)?;
     let git = Git::discover()?;
+    let channel = review_channel_from_selection(cli.channel.as_deref(), &git)?;
     let notes = GitNotesStore::new(&git, channel.notes_ref().clone());
 
     match cli.command {
@@ -110,19 +110,65 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
     }
 }
 
-fn review_channel_from_cli(input: &str) -> Result<ReviewChannel, AppError> {
-    let candidate = ReviewChannelCandidate::new(input)?;
+fn review_channel_from_selection(
+    explicit: Option<&str>,
+    git: &Git,
+) -> Result<ReviewChannel, AppError> {
+    match explicit {
+        Some(input) => review_channel_from_input(input, ReviewChannelSource::Cli),
+        None => git.configured_review_channel()?.map_or_else(
+            || {
+                review_channel_from_input(
+                    DEFAULT_REVIEW_CHANNEL,
+                    ReviewChannelSource::BuiltInDefault,
+                )
+            },
+            |input| review_channel_from_input(&input, ReviewChannelSource::Config),
+        ),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReviewChannelSource {
+    Cli,
+    Config,
+    BuiltInDefault,
+}
+
+fn review_channel_from_input(
+    input: &str,
+    source: ReviewChannelSource,
+) -> Result<ReviewChannel, AppError> {
+    let candidate = ReviewChannelCandidate::new(input)
+        .map_err(|error| channel_error_from_source(error, source))?;
 
     // Channel validity is exact Git refname validity for the concrete notes ref
     // git-vet will use: refs/notes/vet/<channel>. Keep the Git subprocess at
-    // the CLI boundary instead of making ReviewChannel construction impure.
+    // the CLI/config boundary instead of making ReviewChannel construction
+    // impure.
     match check_ref_format(candidate.notes_ref_name()) {
         Ok(()) => Ok(candidate.into_channel_after_git_check_ref_format()),
         Err(CheckRefFormatError::Rejected { ref_name, details }) => Err(candidate
-            .channel_error(format!(
-                "`git check-ref-format` rejected {ref_name:?}: {details}"
+            .channel_error(details_from_source(
+                format!("`git check-ref-format` rejected {ref_name:?}: {details}"),
+                source,
             ))
             .into()),
         Err(CheckRefFormatError::Io(error)) => Err(AppError::Io(error)),
+    }
+}
+
+fn channel_error_from_source(error: ChannelError, source: ReviewChannelSource) -> AppError {
+    ChannelError {
+        channel: error.channel,
+        details: details_from_source(error.details, source),
+    }
+    .into()
+}
+
+fn details_from_source(details: String, source: ReviewChannelSource) -> String {
+    match source {
+        ReviewChannelSource::Config => format!("from git config vet.channel: {details}"),
+        ReviewChannelSource::Cli | ReviewChannelSource::BuiltInDefault => details,
     }
 }

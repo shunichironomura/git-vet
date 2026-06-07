@@ -34,7 +34,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
 
 - `git-vet [--channel <channel>] mark <paths...>`
   - Resolve each path to `HEAD:<path>` blob.
-  - Append a provenance record to `refs/notes/vet/<channel>` for that blob. Omit `--channel` to use `default`.
+  - Append a provenance record to `refs/notes/vet/<channel>` for that blob. Omit `--channel` to use `vet.channel`, falling back to `default` when unset.
   - Make marking idempotent by reading existing records, appending the new record, sorting/deduplicating, then force-writing the note.
   - Do not mutate Git config when marking; sort/deduplicate the note body before force-writing it.
 - `git-vet [--channel <channel>] status [--json] [--check]`
@@ -74,6 +74,8 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - `.vetignore` excludes files from status/check
   - untracked or missing paths exit `2`
   - default channel writes to `refs/notes/vet/default`
+  - `vet.channel` config selects the default channel when `--channel` is omitted
+  - explicit `--channel` overrides `vet.channel`, including invalid configured values
   - `mark` does not write persistent `notes.mergeStrategy` config
   - channels are independent for `mark`, `status`, `diff`, and `status --check`
   - invalid channel names exit `2`

@@ -698,6 +698,99 @@ fn status_check_is_channel_specific() {
 }
 
 #[test]
+fn vet_channel_config_selects_default_review_channel() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "vet.channel", "security"]);
+
+    let document = status_json_document(&repo, &["status", "--json"]);
+    assert_eq!(document["channel"], "security");
+
+    let mark = repo.run_vet(&["mark", "a.txt"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+
+    let security_note = git_output(
+        repo.path(),
+        ["notes", "--ref=vet/security", "show", "HEAD:a.txt"],
+    );
+    assert!(
+        security_note.status.success(),
+        "security note missing: {}",
+        stderr(&security_note)
+    );
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/default"));
+}
+
+#[test]
+fn explicit_channel_overrides_vet_channel_config() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "vet.channel", "security"]);
+
+    let document = status_json_document(&repo, &["status", "--json", "--channel", "default"]);
+    assert_eq!(document["channel"], "default");
+
+    let mark = repo.run_vet(&["mark", "a.txt", "--channel", "default"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+
+    assert!(ref_exists(repo.path(), "refs/notes/vet/default"));
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/security"));
+}
+
+#[test]
+fn empty_vet_channel_config_is_rejected() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "vet.channel", ""]);
+
+    let output = repo.run_vet(&["status"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("invalid review channel"), "{stderr}");
+    assert!(stderr.contains("vet.channel"), "{stderr}");
+    assert!(
+        stderr.contains("channel name must not be empty"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn invalid_vet_channel_config_is_rejected_unless_explicit_channel_is_set() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "vet.channel", "bad..channel"]);
+
+    let configured = repo.run_vet(&["status"]);
+    assert_eq!(configured.status.code(), Some(2));
+    let configured_stderr = stderr(&configured);
+    assert!(
+        configured_stderr.contains("invalid review channel"),
+        "{configured_stderr}"
+    );
+    assert!(
+        configured_stderr.contains("vet.channel"),
+        "{configured_stderr}"
+    );
+    assert!(
+        configured_stderr.contains("git check-ref-format"),
+        "{configured_stderr}"
+    );
+
+    let explicit = repo.run_vet(&["status", "--json", "--channel", "default"]);
+    assert!(
+        explicit.status.success(),
+        "explicit channel should override invalid config: {}",
+        stderr(&explicit)
+    );
+    let document: Value = require(serde_json::from_slice(&explicit.stdout), "status JSON");
+    assert_eq!(document["channel"], "default");
+}
+
+#[test]
 fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
