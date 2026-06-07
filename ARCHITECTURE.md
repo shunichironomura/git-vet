@@ -17,7 +17,8 @@ The library modules form a directed acyclic graph (DAG). The list below is topol
 9. `git` — repository discovery, path normalization against repo prefix, HEAD tree/blob queries with `gix`, user config lookup, dirty-path checks, remote selection, history walking, rename-aware raw-log parsing, and Git diff streaming.
 10. `notes` — Git-notes storage adapter, `NotesStore` trait, note listing/showing/writing/removal/pruning, and channel sync fetch/merge/push behavior.
 11. `status_output` — human-readable, colored, JSON, and check-mode status rendering.
-12. `commands` — command workflows and core orchestration, including dirty-path prompting and review-state classification.
-13. `cli` — clap-based CLI shell, global `--channel`, subcommand dispatch, channel ref validation, repository/notes-store construction, and process exit-code mapping.
+12. `sync_progress` — typed sync progress steps/outcomes plus interactive spinner and plain non-TTY renderers for sync progress.
+13. `commands` — command workflows and core orchestration, including dirty-path prompting, sync progress orchestration, and review-state classification.
+14. `cli` — clap-based CLI shell, global `--channel`, subcommand dispatch, channel ref validation, repository/notes-store construction, TTY-aware progress-reporter selection, and process exit-code mapping.
 
 `src/lib.rs` declares these modules and re-exports the public API used by the binary and external callers. `src/main.rs` is only the binary entry point: it delegates to `run_cli` and maps errors to exit code `2`.

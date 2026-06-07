@@ -5,12 +5,14 @@ use clap::{Parser, Subcommand};
 
 use crate::channel::{DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
 use crate::commands::{
-    DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, unmark_paths,
+    DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, sync_notes,
+    unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
 use crate::git_ref_format::{CheckRefFormatError, check_ref_format};
 use crate::notes::{GitNotesStore, NotesStore};
+use crate::sync_progress::SyncProgressReporter;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -97,7 +99,8 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
         }
         CommandKind::Sync { remote } => {
             let remote = git.select_sync_remote(remote.as_deref())?;
-            notes.sync(&remote)?;
+            let mut progress = SyncProgressReporter::from_environment();
+            sync_notes(&notes, &channel, &remote, &mut progress)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Prune => {
