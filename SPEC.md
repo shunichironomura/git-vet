@@ -135,7 +135,7 @@ Notes for blobs that no longer exist anywhere in the repo accumulate slowly. `gi
 
 ## 6. Command surface
 
-Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical behavior in all three. All commands accept global `--channel <channel>`; if omitted, `default` is used.
+Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical behavior in all three. All commands accept global `--channel <channel>`; if omitted, `vet.channel` from Git config is used; if that config key is unset, `default` is used.
 
 | Command | Behavior |
 |---|---|
@@ -253,7 +253,7 @@ Different channels are independent. Reviewing a blob in `default` does not mark 
 - `cargo install git-vet` is the install path; `git vet` lights up with no further wiring.
 - Ship `git-vet.1` so `git help vet` works; `git help -a` and completion discover `git-*` binaries on `PATH`.
 - **Path resolution:** when run as `git vet`, Git sets `GIT_PREFIX` to the subdirectory the user invoked from. Resolve user-supplied relative paths against the repository prefix (gix repository discovery, or `git rev-parse --show-prefix`) so `git vet mark foo.rs` from a subdirectory means the same file as the direct invocation. Normalize once, up front.
-- **Channel option:** `--channel <channel>` is global and may appear before or after the subcommand. If omitted, use `default`. Channel names must form a valid Git ref when appended to `refs/notes/vet/`.
+- **Channel option:** `--channel <channel>` is global and may appear before or after the subcommand. Channel selection priority is explicit `--channel <channel>`, then Git config `vet.channel`, then built-in `default`. Channel names from either CLI or config must form a valid Git ref when appended to `refs/notes/vet/`. If configured `vet.channel` is present but empty or invalid, exit with a usage/runtime error unless a valid explicit `--channel` overrides it.
 - **Shadowing caveat:** Git prioritizes its own builtins over `PATH`. If Git ever shipped a builtin `vet`, `git vet` would resolve to it; direct `git-vet`/`vet` invocation is immune. No such builtin exists today.
 
 ---

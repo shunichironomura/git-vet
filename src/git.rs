@@ -132,6 +132,10 @@ impl Git {
         Ok(Vetter::new(name, email))
     }
 
+    pub(crate) fn configured_review_channel(&self) -> Result<Option<String>, AppError> {
+        self.optional_config_value("vet.channel")
+    }
+
     pub(crate) fn select_sync_remote(
         &self,
         explicit: Option<&str>,
