@@ -81,11 +81,25 @@ git vet status # uses security
 
 ## Ignoring files
 
-`git-vet` only considers tracked files at `HEAD`, so `.gitignore` is naturally respected. `.vetignore` is an additional filter for tracked files that should not be gated. It uses gitignore syntax:
+`git-vet` only considers tracked files at `HEAD`, so `.gitignore` is naturally respected. `.vetignore` is an additional filter for tracked files that should not be gated in any channel. It uses gitignore syntax:
 
 ```gitignore
 Cargo.lock
 *.generated.rs
+```
+
+You can add channel-specific rules in `.vetignore.<channel>`. Channel names are flat names without `/`, so `--channel security` uses `.vetignore.security`.
+
+Channel-specific rules are loaded after `.vetignore`, so they can re-include globally ignored paths:
+
+```gitignore
+# .vetignore
+generated/**
+```
+
+```gitignore
+# .vetignore.security
+!generated/security-critical.rs
 ```
 
 ## Notes
