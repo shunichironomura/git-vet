@@ -13,6 +13,10 @@ pub struct ReviewChannel {
 }
 
 impl ReviewChannel {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.name
+    }
+
     pub(crate) const fn notes_ref(&self) -> &NotesRef {
         &self.notes_ref
     }
@@ -30,6 +34,12 @@ impl ReviewChannelCandidate {
             return Err(ChannelError {
                 channel: input.to_owned(),
                 details: "channel name must not be empty".to_owned(),
+            });
+        }
+        if input.contains('/') {
+            return Err(ChannelError {
+                channel: input.to_owned(),
+                details: "channel name must not contain '/'".to_owned(),
             });
         }
 

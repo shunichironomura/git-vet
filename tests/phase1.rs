@@ -802,7 +802,6 @@ fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
         "bad..channel",
         ".hidden",
         "foo.lock",
-        "foo//bar",
         "foo bar",
         "foo@{bar",
         "foo:bar",
@@ -817,13 +816,16 @@ fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
 }
 
 #[test]
-fn valid_channel_names_can_contain_slashes() {
+fn nested_channel_names_are_rejected() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
 
-    let document = status_json_document(&repo, &["status", "--json", "--channel", "team/security"]);
-    assert_eq!(document["channel"], "team/security");
+    let output = repo.run_vet(&["status", "--channel", "team/security"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("invalid review channel"), "{stderr}");
+    assert!(stderr.contains("must not contain '/'"), "{stderr}");
 }
 
 #[test]
@@ -999,6 +1001,98 @@ fn vetignore_excludes_files_from_status_and_check() {
 
     let check = repo.run_vet(&["status", "--check"]);
     assert!(check.status.success(), "check failed: {}", stderr(&check));
+}
+
+#[test]
+fn per_channel_vetignore_applies_only_to_selected_channel() {
+    let repo = TestRepo::new();
+    repo.write("kept.txt", "kept\n");
+    repo.write("security-ignored.txt", "ignored in security\n");
+    repo.write(".vetignore.security", "security-ignored.txt\n");
+    repo.commit_all("initial");
+
+    let default_records = status_json(&repo);
+    assert!(
+        default_records
+            .iter()
+            .any(|record| record["path"] == "security-ignored.txt")
+    );
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    assert!(
+        security_records
+            .iter()
+            .all(|record| record["path"] != "security-ignored.txt")
+    );
+}
+
+#[test]
+fn per_channel_vetignore_can_reinclude_global_ignored_paths() {
+    let repo = TestRepo::new();
+    repo.write("generated/security-critical.rs", "critical\n");
+    repo.write("generated/other.rs", "other\n");
+    repo.write(".vetignore", "generated/**\n");
+    repo.write(".vetignore.security", "!generated/security-critical.rs\n");
+    repo.commit_all("initial");
+
+    let default_records = status_json(&repo);
+    assert!(default_records.iter().all(|record| {
+        !record["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("generated/"))
+    }));
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    assert!(
+        security_records
+            .iter()
+            .any(|record| record["path"] == "generated/security-critical.rs")
+    );
+    assert!(
+        security_records
+            .iter()
+            .all(|record| record["path"] != "generated/other.rs")
+    );
+}
+
+#[test]
+fn per_channel_vetignore_uses_dot_suffixed_channel_file() {
+    let repo = TestRepo::new();
+    repo.write("team-only.txt", "ignored in team channel\n");
+    repo.write(".vetignore.team", "team-only.txt\n");
+    repo.commit_all("initial");
+
+    let team_records = status_json_with_args(&repo, &["status", "--json", "--channel", "team"]);
+    assert!(
+        team_records
+            .iter()
+            .all(|record| record["path"] != "team-only.txt")
+    );
+
+    let security_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "security"]);
+    assert!(
+        security_records
+            .iter()
+            .any(|record| record["path"] == "team-only.txt")
+    );
+}
+
+#[test]
+fn explicit_path_commands_can_target_ignored_paths() {
+    let repo = TestRepo::new();
+    repo.write("ignored.txt", "ignored\n");
+    repo.write(".vetignore.security", "ignored.txt\n");
+    repo.commit_all("initial");
+
+    let mark = repo.run_vet(&["--channel", "security", "mark", "ignored.txt"]);
+    assert!(mark.status.success(), "mark failed: {}", stderr(&mark));
+
+    let diff = repo.run_vet(&["--channel", "security", "diff", "ignored.txt"]);
+    assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
+    assert!(stdout(&diff).contains("ignored.txt is up to date"));
 }
 
 #[test]

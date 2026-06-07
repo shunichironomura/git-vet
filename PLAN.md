@@ -40,7 +40,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
 - `git-vet [--channel <channel>] status [--json] [--check]`
   - List all tracked, in-scope files, skipping submodules/gitlinks.
   - Load reviewed blob OIDs once from `refs/notes/vet/<channel>`.
-  - Apply `.vetignore` using gitignore syntax.
+  - Apply `.vetignore` plus `.vetignore.<channel>` using gitignore syntax.
   - Default mode: stably grouped human-readable output for `vetted`, `stale`, and `new`.
   - `--json`: stably sorted JSON object with active `channel` and file records from the spec.
   - `--check`: fast gate path for the selected channel; do only current-blob membership checks, print unreviewed files, exit `1` if any are unreviewed.
@@ -60,7 +60,7 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - otherwise → `New`
 - Keep history walking out of `status --check`.
 - Parse note records enough to populate `last_vetted_at` and `vetted_by` for JSON/status metadata.
-- Validate channel names by ensuring `refs/notes/vet/<channel>` is a valid Git refname.
+- Validate channel names by rejecting `/` and ensuring `refs/notes/vet/<channel>` is a valid Git refname.
 
 ### Tests and acceptance criteria
 
@@ -71,14 +71,15 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - editing and committing a file makes it `stale`
   - `diff` for `new` and `stale` files shows the expected Git diff
   - `status --check` exits `0` only when all in-scope tracked files are reviewed in the selected channel
-  - `.vetignore` excludes files from status/check
+  - `.vetignore` excludes files from status/check for every channel
+  - `.vetignore.<channel>` excludes files only for the exact active flat channel name
   - untracked or missing paths exit `2`
   - default channel writes to `refs/notes/vet/default`
   - `vet.channel` config selects the default channel when `--channel` is omitted
   - explicit `--channel` overrides `vet.channel`, including invalid configured values
   - `mark` does not write persistent `notes.mergeStrategy` config
   - channels are independent for `mark`, `status`, `diff`, and `status --check`
-  - invalid channel names exit `2`
+  - invalid channel names, including nested names containing `/`, exit `2`
 - Manual smoke test: install/build locally and verify `git vet status` works through Git's `git-*` dispatch when the binary is on `PATH`.
 
 ## Phase 2 — Spec completion and collaboration niceties
@@ -114,7 +115,7 @@ Goal: make the tool easy to install, discover, and maintain.
 - Documentation:
   - Add README usage examples for the steady-state and legacy-repo onboarding workflows.
   - Document blob-keyed behavior, especially identical-content files and renames.
-  - Add `.vetignore` examples.
+  - Add `.vetignore` and per-channel `.vetignore.<channel>` examples.
   - Ship `git-vet.1` so `git help vet` works.
 - Developer quality:
   - Add CI for `cargo fmt`, `cargo clippy`, and tests.

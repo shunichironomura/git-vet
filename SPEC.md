@@ -38,7 +38,7 @@ The unit of review is **file content**: reviewing a file means signing off on it
 ## 3. Concepts and definitions
 
 - **Blob OID** — the Git object ID of a file's content. `HEAD:<path>` resolves to the blob OID of `<path>` at `HEAD`. Identical content always has the same blob OID.
-- **Review channel** — an independent review pipeline. The default channel is named `default`; commands use it unless `--channel <name>` is passed.
+- **Review channel** — an independent review pipeline. Channel names are flat names (no `/`) to avoid Git ref prefix collisions; the default channel is named `default`; commands use it unless `--channel <name>` is passed.
 - **Reviewed set** — for a channel, the set of blob OIDs that carry a note in `refs/notes/vet/<channel>`. A blob is "reviewed" iff it is a member of the selected channel's set.
 - **Vetted (stored state)** — a file is *vetted* iff its current blob OID (at `HEAD`) is in the selected channel's reviewed set. This is the only persisted state. Everything else is derived.
 - **Sign-off** — the act of adding the file's current blob OID to the selected channel's reviewed set (`git vet mark`).
@@ -240,9 +240,18 @@ Different channels are independent. Reviewing a blob in `default` does not mark 
 6. **Working-tree vs HEAD.** Review state is defined against committed content (`HEAD:<path>`), not the dirty working tree. Marking signs off the committed blob; uncommitted edits are not considered. (Implementation may warn if the working tree differs from `HEAD` for a path being marked.)
 7. **Submodules.** Out of scope in v1; skip gitlink entries.
 
-### 9.4 Ignore list
+### 9.4 Ignore lists
 
-`status`/`--check` consult a repo-root `.vetignore` using gitignore syntax, so generated, vendored, and lockfile paths can be excluded and "everything reviewed" is attainable in any channel. This is a plain denylist for the gate only — not scope-seeding state, and it stores nothing in notes.
+`status`/`--check` consult ignore policy files using gitignore syntax, so generated, vendored, and lockfile paths can be excluded and "everything reviewed" is attainable. Ignore policy is a plain gate-scope filter only — not scope-seeding state, and it stores nothing in notes.
+
+Ignore rules are loaded from repo-root policy files in this order:
+
+1. `.vetignore` — global rules that apply to every channel.
+2. `.vetignore.<channel>` — rules that apply only to the exact active review channel.
+
+The per-channel path uses the same hidden base filename with a channel suffix, e.g. channel `security` uses `.vetignore.security`. Missing policy files are treated as empty. Since later gitignore rules win, channel-specific rules can use negation (`!path`) to re-include a path ignored by `.vetignore`.
+
+All patterns are interpreted relative to the repository root, including patterns loaded from `.vetignore.<channel>`. Ignore policy files themselves are tracked files like any other; unless explicitly ignored by policy, changes to `.vetignore` and `.vetignore.<channel>` remain in the review scope.
 
 ---
 
@@ -253,7 +262,7 @@ Different channels are independent. Reviewing a blob in `default` does not mark 
 - `cargo install git-vet` is the install path; `git vet` lights up with no further wiring.
 - Ship `git-vet.1` so `git help vet` works; `git help -a` and completion discover `git-*` binaries on `PATH`.
 - **Path resolution:** when run as `git vet`, Git sets `GIT_PREFIX` to the subdirectory the user invoked from. Resolve user-supplied relative paths against the repository prefix (gix repository discovery, or `git rev-parse --show-prefix`) so `git vet mark foo.rs` from a subdirectory means the same file as the direct invocation. Normalize once, up front.
-- **Channel option:** `--channel <channel>` is global and may appear before or after the subcommand. Channel selection priority is explicit `--channel <channel>`, then Git config `vet.channel`, then built-in `default`. Channel names from either CLI or config must form a valid Git ref when appended to `refs/notes/vet/`. If configured `vet.channel` is present but empty or invalid, exit with a usage/runtime error unless a valid explicit `--channel` overrides it.
+- **Channel option:** `--channel <channel>` is global and may appear before or after the subcommand. Channel selection priority is explicit `--channel <channel>`, then Git config `vet.channel`, then built-in `default`. Channel names from either CLI or config must be flat names with no `/`, and must form a valid Git ref when appended to `refs/notes/vet/`. The no-`/` rule avoids Git ref namespace prefix collisions such as `refs/notes/vet/team` versus `refs/notes/vet/team/security`. If configured `vet.channel` is present but empty or invalid, exit with a usage/runtime error unless a valid explicit `--channel` overrides it.
 - **Shadowing caveat:** Git prioritizes its own builtins over `PATH`. If Git ever shipped a builtin `vet`, `git vet` would resolve to it; direct `git-vet`/`vet` invocation is immune. No such builtin exists today.
 
 ---

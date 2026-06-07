@@ -27,7 +27,7 @@ pub enum AppError {
     PathNotTracked(RepoPath),
     #[error("path is a submodule/gitlink and is out of scope: {0}")]
     PathIsSubmodule(RepoPath),
-    #[error("failed to read .vetignore: {0}")]
+    #[error("failed to read vetignore file: {0}")]
     Vetignore(String),
     #[error("missing git config user.name")]
     MissingUserName,

@@ -114,7 +114,7 @@ pub fn status(
     channel: &ReviewChannel,
     mode: StatusMode,
 ) -> Result<Gate, AppError> {
-    let vetignore = Vetignore::load(&git.root)?;
+    let vetignore = Vetignore::load(&git.root, channel)?;
     let tracked = git
         .tracked_files_at_head()?
         .into_iter()
