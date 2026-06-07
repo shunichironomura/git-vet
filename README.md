@@ -4,6 +4,10 @@ Git-based vetting gate for tracked file contents.
 
 `git-vet` records that the exact committed contents of a tracked file have been vetted (i.e., reviewed and signed off). Vetting state is keyed by Git blob ID, so editing a file creates new content that must be vetted again.
 
+![Screenshot of `git vet status` showing new, stale, and vetted files](images/git-vet-status.png)
+
+Run `git vet status` to get a review backlog for the repository. It shows files whose current committed contents are `new`, files that are `stale` because they changed since they were last vetted, and files that are already `vetted`.
+
 ## Install
 
 ```sh
