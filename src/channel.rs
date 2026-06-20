@@ -6,6 +6,8 @@ use thiserror::Error;
 const NOTES_REF_PREFIX: &str = "refs/notes/vet";
 pub(crate) const DEFAULT_REVIEW_CHANNEL: &str = "default";
 
+/// A review channel whose notes ref has been validated by `git check-ref-format`
+/// without normalization.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewChannel {
     name: String,
@@ -52,22 +54,22 @@ impl ReviewChannelCandidate {
     pub(crate) fn notes_ref_name(&self) -> &str {
         &self.notes_ref_name
     }
+}
 
-    /// Convert only after the caller has validated `notes_ref_name()` with
-    /// `git check-ref-format` without normalization.
-    pub(crate) fn into_channel_after_git_check_ref_format(self) -> ReviewChannel {
-        ReviewChannel {
-            name: self.name,
+pub(crate) trait ValidatedReviewChannelCandidate {
+    fn into_candidate(self) -> ReviewChannelCandidate;
+}
+
+impl ReviewChannel {
+    pub(crate) fn from_validated_candidate(
+        candidate: impl ValidatedReviewChannelCandidate,
+    ) -> Self {
+        let candidate = candidate.into_candidate();
+        Self {
+            name: candidate.name,
             notes_ref: NotesRef {
-                name: self.notes_ref_name,
+                name: candidate.notes_ref_name,
             },
-        }
-    }
-
-    pub(crate) fn channel_error(&self, details: String) -> ChannelError {
-        ChannelError {
-            channel: self.name.clone(),
-            details,
         }
     }
 }

@@ -146,14 +146,16 @@ fn review_channel_from_input(
     // git-vet will use: refs/notes/vet/<channel>. Keep the Git subprocess at
     // the CLI/config boundary instead of making ReviewChannel construction
     // impure.
-    match check_ref_format(candidate.notes_ref_name()) {
-        Ok(()) => Ok(candidate.into_channel_after_git_check_ref_format()),
-        Err(CheckRefFormatError::Rejected { ref_name, details }) => Err(candidate
-            .channel_error(details_from_source(
+    match check_ref_format(candidate) {
+        Ok(validated) => Ok(ReviewChannel::from_validated_candidate(validated)),
+        Err(CheckRefFormatError::Rejected { ref_name, details }) => Err(ChannelError {
+            channel: input.to_owned(),
+            details: details_from_source(
                 format!("`git check-ref-format` rejected {ref_name:?}: {details}"),
                 source,
-            ))
-            .into()),
+            ),
+        }
+        .into()),
         Err(CheckRefFormatError::Io(error)) => Err(AppError::Io(error)),
     }
 }
