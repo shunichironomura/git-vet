@@ -19,6 +19,8 @@ pub enum AppError {
     NonUtf8Path,
     #[error("path escapes the repository root")]
     PathOutsideRepo,
+    #[error("path must be absolute")]
+    NonAbsolutePath,
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
     #[error("repo path is invalid: {details}")]
@@ -56,6 +58,7 @@ impl From<PathError> for AppError {
         match error {
             PathError::NonUtf8 => Self::NonUtf8Path,
             PathError::OutsideRepo => Self::PathOutsideRepo,
+            PathError::NonAbsolute => Self::NonAbsolutePath,
             PathError::EmptyPath => Self::EmptyPath,
             PathError::EmptyComponent => Self::InvalidRepoPath {
                 details: "path contains an empty component",

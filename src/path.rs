@@ -21,7 +21,7 @@ impl RepoPath {
         Ok(Self { components })
     }
 
-    pub(crate) fn to_path_buf(&self) -> PathBuf {
+    pub(crate) fn to_os_path_buf(&self) -> PathBuf {
         self.components
             .iter()
             .map(RepoPathComponent::as_str)
@@ -103,6 +103,8 @@ pub(crate) enum PathError {
     NonUtf8,
     #[error("path escapes the repository root")]
     OutsideRepo,
+    #[error("path must be absolute")]
+    NonAbsolute,
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
     #[error("repo path contains an empty component")]
@@ -114,8 +116,8 @@ pub(crate) enum PathError {
 }
 
 pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
-    let root = normalize_lexically(root);
-    let cwd = normalize_lexically(cwd);
+    let root = normalize_absolute_lexically(root)?;
+    let cwd = normalize_absolute_lexically(cwd)?;
     cwd.strip_prefix(&root)
         .map(Path::to_path_buf)
         .map_err(|_| PathError::OutsideRepo)
@@ -126,8 +128,13 @@ pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, Pa
     RepoPath::from_git_path(path)
 }
 
-pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
-    path.components()
+pub(crate) fn normalize_absolute_lexically(path: &Path) -> Result<PathBuf, PathError> {
+    if !path.is_absolute() {
+        return Err(PathError::NonAbsolute);
+    }
+
+    Ok(path
+        .components()
         .fold(PathBuf::new(), |mut normalized, component| {
             match component {
                 Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
@@ -139,7 +146,7 @@ pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
                 Component::Normal(part) => normalized.push(part),
             }
             normalized
-        })
+        }))
 }
 
 pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
@@ -219,7 +226,15 @@ mod tests {
         let path = RepoPath::from_git_path("src/lib.rs")?;
 
         assert_eq!(path.to_string(), "src/lib.rs");
-        assert_eq!(path.to_path_buf(), PathBuf::from("src").join("lib.rs"));
+        assert_eq!(path.to_os_path_buf(), PathBuf::from("src").join("lib.rs"));
         Ok(())
+    }
+
+    #[test]
+    fn normalize_absolute_lexically_rejects_relative_paths() {
+        assert!(matches!(
+            normalize_absolute_lexically(Path::new("src/../lib.rs")),
+            Err(PathError::NonAbsolute)
+        ));
     }
 }
