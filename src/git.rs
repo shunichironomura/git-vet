@@ -8,7 +8,8 @@ use gix::bstr::ByteSlice;
 use crate::error::{AppError, git_error};
 use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile};
 use crate::path::{
-    RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr, repo_path_from_relative,
+    PathError, RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr,
+    repo_path_from_relative,
 };
 use crate::remote::{RemoteError, RemoteName, RemoteNameSource};
 use crate::review::Vetter;
@@ -46,7 +47,7 @@ impl Git {
         let root = normalize_lexically(&self.root);
         let relative = normalized
             .strip_prefix(&root)
-            .map_err(|_| AppError::PathOutsideRepo(input.display().to_string()))?;
+            .map_err(|_| AppError::from(PathError::PathOutsideRepo(input.display().to_string())))?;
         repo_path_from_relative(relative).map_err(AppError::from)
     }
 

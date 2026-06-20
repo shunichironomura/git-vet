@@ -57,7 +57,10 @@ impl From<PathError> for AppError {
             PathError::NonUtf8Path(path) => Self::NonUtf8Path(path),
             PathError::PathOutsideRepo(path) => Self::PathOutsideRepo(path),
             PathError::EmptyPath => Self::EmptyPath,
-            PathError::InvalidRepoPath { path, details } => Self::InvalidRepoPath { path, details },
+            PathError::InvalidRepoPath { path, reason } => Self::InvalidRepoPath {
+                path,
+                details: reason.message(),
+            },
         }
     }
 }
