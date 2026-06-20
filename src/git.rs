@@ -47,7 +47,7 @@ impl Git {
         let root = normalize_lexically(&self.root);
         let relative = normalized
             .strip_prefix(&root)
-            .map_err(|_| AppError::from(PathError::PathOutsideRepo(input.display().to_string())))?;
+            .map_err(|_| AppError::from(PathError::OutsideRepo))?;
         repo_path_from_relative(relative).map_err(AppError::from)
     }
 

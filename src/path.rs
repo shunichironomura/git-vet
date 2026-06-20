@@ -56,23 +56,19 @@ impl Serialize for RepoPath {
 struct RepoPathComponent(String);
 
 impl RepoPathComponent {
-    fn parse(component: &str) -> Result<Self, InvalidRepoPathComponentReason> {
+    fn parse(component: &str) -> Result<Self, RepoPathComponentError> {
         match component {
-            "" => Err(InvalidRepoPathComponentReason::Empty),
-            "." => Err(InvalidRepoPathComponentReason::CurrentDir),
-            ".." => Err(InvalidRepoPathComponentReason::ParentDir),
-            value if value.contains('\0') => Err(InvalidRepoPathComponentReason::NulByte),
+            "" => Err(RepoPathComponentError::Empty),
+            "." => Err(RepoPathComponentError::CurrentDir),
+            ".." => Err(RepoPathComponentError::ParentDir),
+            value if value.contains('\0') => Err(RepoPathComponentError::NulByte),
             value => Ok(Self(value.to_owned())),
         }
     }
 
-    fn from_os_component(
-        component: &std::ffi::OsStr,
-    ) -> Result<Self, RepoPathComponentFromOsError> {
-        let component = component
-            .to_str()
-            .ok_or(RepoPathComponentFromOsError::NonUtf8)?;
-        Self::parse(component).map_err(RepoPathComponentFromOsError::Invalid)
+    fn from_os_component(component: &std::ffi::OsStr) -> Result<Self, RepoPathComponentError> {
+        let component = component.to_str().ok_or(RepoPathComponentError::NonUtf8)?;
+        Self::parse(component)
     }
 
     fn as_str(&self) -> &str {
@@ -81,67 +77,40 @@ impl RepoPathComponent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RepoPathComponentFromOsError {
+enum RepoPathComponentError {
     NonUtf8,
-    Invalid(InvalidRepoPathComponentReason),
-}
-
-impl RepoPathComponentFromOsError {
-    fn into_path_error(self, path: String) -> PathError {
-        match self {
-            Self::NonUtf8 => PathError::NonUtf8Path(path),
-            Self::Invalid(reason) => PathError::invalid_component(path, reason),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum InvalidRepoPathComponentReason {
     Empty,
     CurrentDir,
     ParentDir,
     NulByte,
 }
 
-impl InvalidRepoPathComponentReason {
-    pub(crate) const fn message(self) -> &'static str {
+impl RepoPathComponentError {
+    const fn into_path_error(self) -> PathError {
         match self {
-            Self::Empty => "path contains an empty component",
-            Self::CurrentDir => "path contains a current-directory component",
-            Self::ParentDir => "path contains a parent-directory component",
-            Self::NulByte => "path contains a NUL byte",
+            Self::NonUtf8 => PathError::NonUtf8,
+            Self::Empty => PathError::EmptyComponent,
+            Self::CurrentDir => PathError::CurrentDirComponent,
+            Self::ParentDir => PathError::OutsideRepo,
+            Self::NulByte => PathError::NulByte,
         }
-    }
-}
-
-impl fmt::Display for InvalidRepoPathComponentReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message())
     }
 }
 
 #[derive(Debug, Error)]
 pub(crate) enum PathError {
-    #[error("path is not valid UTF-8: {0}")]
-    NonUtf8Path(String),
-    #[error("path escapes the repository root: {0}")]
-    PathOutsideRepo(String),
+    #[error("path is not valid UTF-8")]
+    NonUtf8,
+    #[error("path escapes the repository root")]
+    OutsideRepo,
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
-    #[error("repo path is invalid: {path}: {reason}")]
-    InvalidRepoPath {
-        path: String,
-        reason: InvalidRepoPathComponentReason,
-    },
-}
-
-impl PathError {
-    fn invalid_component(path: String, reason: InvalidRepoPathComponentReason) -> Self {
-        match reason {
-            InvalidRepoPathComponentReason::ParentDir => Self::PathOutsideRepo(path),
-            reason => Self::InvalidRepoPath { path, reason },
-        }
-    }
+    #[error("repo path contains an empty component")]
+    EmptyComponent,
+    #[error("repo path contains a current-directory component")]
+    CurrentDirComponent,
+    #[error("repo path contains a NUL byte")]
+    NulByte,
 }
 
 pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
@@ -149,13 +118,11 @@ pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathEr
     let cwd = normalize_lexically(cwd);
     cwd.strip_prefix(&root)
         .map(Path::to_path_buf)
-        .map_err(|_| PathError::PathOutsideRepo(cwd.display().to_string()))
+        .map_err(|_| PathError::OutsideRepo)
 }
 
 pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
-    let path = path
-        .to_str()
-        .map_err(|err| PathError::NonUtf8Path(err.to_string()))?;
+    let path = path.to_str().map_err(|_| PathError::NonUtf8)?;
     RepoPath::from_git_path(path)
 }
 
@@ -176,17 +143,16 @@ pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
-    let path_display = path.display().to_string();
     let components = path
         .components()
         .filter_map(|component| match component {
             Component::Normal(part) => Some(
                 RepoPathComponent::from_os_component(part)
-                    .map_err(|err| err.into_path_error(path_display.clone())),
+                    .map_err(RepoPathComponentError::into_path_error),
             ),
             Component::CurDir => None,
             Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                Some(Err(PathError::PathOutsideRepo(path_display.clone())))
+                Some(Err(PathError::OutsideRepo))
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -205,8 +171,7 @@ fn parse_git_path_components(path: &str) -> Result<Vec<RepoPathComponent>, PathE
 
     path.split('/')
         .map(|component| {
-            RepoPathComponent::parse(component)
-                .map_err(|reason| PathError::invalid_component(path.to_owned(), reason))
+            RepoPathComponent::parse(component).map_err(RepoPathComponentError::into_path_error)
         })
         .collect()
 }
@@ -224,19 +189,29 @@ mod tests {
     }
 
     #[test]
-    fn repo_path_from_git_path_rejects_structurally_invalid_paths() {
-        for path in [
-            "/src/lib.rs",
-            "src//lib.rs",
-            "src/./lib.rs",
-            "src/../lib.rs",
-            "src/lib.rs/",
-        ] {
-            assert!(
-                RepoPath::from_git_path(path).is_err(),
-                "expected {path:?} to be rejected"
-            );
+    fn repo_path_from_git_path_classifies_structural_errors() {
+        assert!(matches!(
+            RepoPath::from_git_path(""),
+            Err(PathError::EmptyPath)
+        ));
+        for path in ["/src/lib.rs", "src//lib.rs", "src/lib.rs/"] {
+            assert!(matches!(
+                RepoPath::from_git_path(path),
+                Err(PathError::EmptyComponent),
+            ));
         }
+        assert!(matches!(
+            RepoPath::from_git_path("src/./lib.rs"),
+            Err(PathError::CurrentDirComponent)
+        ));
+        assert!(matches!(
+            RepoPath::from_git_path("src/../lib.rs"),
+            Err(PathError::OutsideRepo)
+        ));
+        assert!(matches!(
+            RepoPath::from_git_path("src/\0/lib.rs"),
+            Err(PathError::NulByte)
+        ));
     }
 
     #[test]

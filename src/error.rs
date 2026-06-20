@@ -15,14 +15,14 @@ pub enum AppError {
     },
     #[error("repository has no worktree")]
     MissingWorktree,
-    #[error("path is not valid UTF-8: {0}")]
-    NonUtf8Path(String),
-    #[error("path escapes the repository root: {0}")]
-    PathOutsideRepo(String),
+    #[error("path is not valid UTF-8")]
+    NonUtf8Path,
+    #[error("path escapes the repository root")]
+    PathOutsideRepo,
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
-    #[error("repo path is invalid: {path}: {details}")]
-    InvalidRepoPath { path: String, details: &'static str },
+    #[error("repo path is invalid: {details}")]
+    InvalidRepoPath { details: &'static str },
     #[error("path is not tracked at HEAD: {0}")]
     PathNotTracked(RepoPath),
     #[error("path is a submodule/gitlink and is out of scope: {0}")]
@@ -54,12 +54,17 @@ pub enum AppError {
 impl From<PathError> for AppError {
     fn from(error: PathError) -> Self {
         match error {
-            PathError::NonUtf8Path(path) => Self::NonUtf8Path(path),
-            PathError::PathOutsideRepo(path) => Self::PathOutsideRepo(path),
+            PathError::NonUtf8 => Self::NonUtf8Path,
+            PathError::OutsideRepo => Self::PathOutsideRepo,
             PathError::EmptyPath => Self::EmptyPath,
-            PathError::InvalidRepoPath { path, reason } => Self::InvalidRepoPath {
-                path,
-                details: reason.message(),
+            PathError::EmptyComponent => Self::InvalidRepoPath {
+                details: "path contains an empty component",
+            },
+            PathError::CurrentDirComponent => Self::InvalidRepoPath {
+                details: "path contains a current-directory component",
+            },
+            PathError::NulByte => Self::InvalidRepoPath {
+                details: "path contains a NUL byte",
             },
         }
     }
