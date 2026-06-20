@@ -9,7 +9,7 @@ use crate::git_types::BlobOid;
 use crate::remote::RemoteName;
 use crate::review::{ReviewInfo, ReviewedSet, parse_note_records};
 
-pub trait NotesStore {
+pub(crate) trait NotesStore {
     fn list_reviewed(&self) -> Result<ReviewedSet, AppError>;
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError>;
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError>;
@@ -18,7 +18,7 @@ pub trait NotesStore {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NoteRemoval {
+pub(crate) enum NoteRemoval {
     Removed,
     Absent,
 }
@@ -29,7 +29,7 @@ struct NoteListEntry {
 }
 
 #[derive(Clone)]
-pub struct GitNotesStore<'git> {
+pub(crate) struct GitNotesStore<'git> {
     git: &'git Git,
     notes_ref: NotesRef,
 }

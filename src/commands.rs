@@ -18,30 +18,30 @@ use crate::sync_progress::{SyncContext, SyncOutcome, SyncProgress, SyncReport, S
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
-pub struct StatusMode {
+pub(crate) struct StatusMode {
     pub(crate) json: bool,
     pub(crate) all: bool,
     pub(crate) check: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarkOptions {
+pub(crate) struct MarkOptions {
     pub(crate) dirty_paths: DirtyPathHandling,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirtyPathHandling {
+pub(crate) enum DirtyPathHandling {
     Prompt,
     Allow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Gate {
+pub(crate) enum Gate {
     Open,
     Closed,
 }
 
-pub fn mark_paths(
+pub(crate) fn mark_paths(
     git: &Git,
     notes: &impl NotesStore,
     paths: &[PathBuf],
@@ -78,7 +78,11 @@ pub fn mark_paths(
     })
 }
 
-pub fn unmark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Result<(), AppError> {
+pub(crate) fn unmark_paths(
+    git: &Git,
+    notes: &impl NotesStore,
+    paths: &[PathBuf],
+) -> Result<(), AppError> {
     let paths = paths
         .iter()
         .map(|path| git.normalize_user_path(path))
@@ -108,7 +112,7 @@ pub fn unmark_paths(git: &Git, notes: &impl NotesStore, paths: &[PathBuf]) -> Re
         })
 }
 
-pub fn status(
+pub(crate) fn status(
     git: &Git,
     notes: &impl NotesStore,
     channel: &ReviewChannel,
@@ -158,7 +162,7 @@ fn human_status_color_enabled() -> bool {
     io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
 }
 
-pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), AppError> {
+pub(crate) fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), AppError> {
     let path = git.normalize_user_path(path)?;
     let file = git.blob_at_head(&path)?;
     let reviewed = notes.list_reviewed()?;
@@ -171,7 +175,7 @@ pub fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), 
     }
 }
 
-pub fn sync_notes(
+pub(crate) fn sync_notes(
     notes: &GitNotesStore<'_>,
     channel: &ReviewChannel,
     remote: &RemoteName,

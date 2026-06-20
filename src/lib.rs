@@ -1,3 +1,9 @@
+// Keep restricted visibility for internal modules without expanding the crate API.
+#![expect(
+    clippy::redundant_pub_crate,
+    reason = "Internal modules use restricted visibility to avoid unreachable public API."
+)]
+
 mod channel;
 mod cli;
 mod commands;
