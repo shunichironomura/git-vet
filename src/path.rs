@@ -16,11 +16,16 @@ pub struct RepoPath {
 }
 
 impl RepoPath {
+    /// Parses a Git path into a repository-relative path.
+    ///
+    /// Git paths always use `/` as the separator and must already be relative
+    /// to the repository root.
     pub(crate) fn from_git_path(path: &str) -> Result<Self, PathError> {
         let components = parse_git_path_components(path)?;
         Ok(Self { components })
     }
 
+    /// Converts this repository path into an OS-native relative path.
     pub(crate) fn to_os_path_buf(&self) -> PathBuf {
         self.components
             .iter()
@@ -28,6 +33,7 @@ impl RepoPath {
             .collect()
     }
 
+    /// Renders this repository path using Git's `/` component separator.
     fn to_git_path(&self) -> String {
         self.components
             .iter()
@@ -52,10 +58,12 @@ impl Serialize for RepoPath {
     }
 }
 
+/// A single validated UTF-8 repository path component.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct RepoPathComponent(String);
 
 impl RepoPathComponent {
+    /// Parses one textual path component and rejects structural components.
     fn parse(component: &str) -> Result<Self, RepoPathComponentError> {
         match component {
             "" => Err(RepoPathComponentError::Empty),
@@ -66,26 +74,35 @@ impl RepoPathComponent {
         }
     }
 
+    /// Converts one OS path component into a validated repository component.
     fn from_os_component(component: &std::ffi::OsStr) -> Result<Self, RepoPathComponentError> {
         let component = component.to_str().ok_or(RepoPathComponentError::NonUtf8)?;
         Self::parse(component)
     }
 
+    /// Returns the component as a UTF-8 string slice.
     fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Validation errors for a single repository path component.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RepoPathComponentError {
+    /// The OS component is not valid UTF-8.
     NonUtf8,
+    /// The component is empty.
     Empty,
+    /// The component is `.`.
     CurrentDir,
+    /// The component is `..`.
     ParentDir,
+    /// The component contains a NUL byte.
     NulByte,
 }
 
 impl RepoPathComponentError {
+    /// Promotes a component-level validation error to a path-level error.
     const fn into_path_error(self) -> PathError {
         match self {
             Self::NonUtf8 => PathError::NonUtf8,
@@ -97,24 +114,36 @@ impl RepoPathComponentError {
     }
 }
 
+/// Errors produced while converting external path representations into typed paths.
 #[derive(Debug, Error)]
 pub(crate) enum PathError {
+    /// The path or component is not valid UTF-8.
     #[error("path is not valid UTF-8")]
     NonUtf8,
+    /// The path escapes, or is not relative to, the repository root.
     #[error("path escapes the repository root")]
     OutsideRepo,
+    /// An absolute path was required but a relative path was provided.
     #[error("path must be absolute")]
     NonAbsolute,
+    /// The path has no file components.
     #[error("empty paths are not valid tracked files")]
     EmptyPath,
+    /// A Git path contains an empty component.
     #[error("repo path contains an empty component")]
     EmptyComponent,
+    /// A Git path contains a `.` component.
     #[error("repo path contains a current-directory component")]
     CurrentDirComponent,
+    /// The path contains a NUL byte.
     #[error("repo path contains a NUL byte")]
     NulByte,
 }
 
+/// Computes the current working directory prefix relative to the repository root.
+///
+/// Both inputs must be absolute paths. `.` components are removed and `..`
+/// components are applied lexically before checking containment.
 pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
     let root = normalize_absolute_lexically(root)?;
     let cwd = normalize_absolute_lexically(cwd)?;
@@ -123,11 +152,16 @@ pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathEr
         .map_err(|_| PathError::OutsideRepo)
 }
 
+/// Converts a Git byte-string path into a typed repository path.
 pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
     let path = path.to_str().map_err(|_| PathError::NonUtf8)?;
     RepoPath::from_git_path(path)
 }
 
+/// Lexically normalizes an absolute path without touching the filesystem.
+///
+/// This removes `.` components and applies `..` components with `PathBuf::pop`.
+/// It does not resolve symlinks or require the path to exist.
 pub(crate) fn normalize_absolute_lexically(path: &Path) -> Result<PathBuf, PathError> {
     if !path.is_absolute() {
         return Err(PathError::NonAbsolute);
@@ -149,7 +183,16 @@ pub(crate) fn normalize_absolute_lexically(path: &Path) -> Result<PathBuf, PathE
         }))
 }
 
+/// Converts an OS-native relative path into a typed repository path.
+///
+/// The input must be relative to the repository root and resolve to a non-empty
+/// tracked-file path. Parent-directory, root, prefix, non-UTF-8, and NUL-byte
+/// components are rejected.
 pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
+    if !path.is_relative() {
+        return Err(PathError::OutsideRepo);
+    }
+
     let components = path
         .components()
         .filter_map(|component| match component {
@@ -171,6 +214,7 @@ pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError
     }
 }
 
+/// Splits and validates a Git path into repository path components.
 fn parse_git_path_components(path: &str) -> Result<Vec<RepoPathComponent>, PathError> {
     if path.is_empty() {
         return Err(PathError::EmptyPath);
@@ -192,6 +236,14 @@ mod tests {
         assert!(matches!(
             repo_path_from_relative(Path::new("")),
             Err(PathError::EmptyPath)
+        ));
+    }
+
+    #[test]
+    fn repo_path_from_relative_rejects_absolute_paths() {
+        assert!(matches!(
+            repo_path_from_relative(Path::new("/src/lib.rs")),
+            Err(PathError::OutsideRepo)
         ));
     }
 
