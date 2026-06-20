@@ -24,7 +24,7 @@ impl Vetignore {
 
     pub(crate) fn is_ignored(&self, path: &RepoPath) -> bool {
         self.matcher
-            .matched_path_or_any_parents(path.to_path_buf(), false)
+            .matched_path_or_any_parents(path.to_os_path_buf(), false)
             .is_ignore()
     }
 }

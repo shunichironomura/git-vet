@@ -8,7 +8,8 @@ use gix::bstr::ByteSlice;
 use crate::error::{AppError, git_error};
 use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile};
 use crate::path::{
-    RepoPath, normalize_lexically, prefix_from_cwd, repo_path_from_bstr, repo_path_from_relative,
+    PathError, RepoPath, normalize_absolute_lexically, prefix_from_cwd, repo_path_from_bstr,
+    repo_path_from_relative,
 };
 use crate::remote::{RemoteError, RemoteName, RemoteNameSource};
 use crate::review::Vetter;
@@ -42,11 +43,11 @@ impl Git {
         } else {
             self.root.join(&self.prefix).join(input)
         };
-        let normalized = normalize_lexically(&joined);
-        let root = normalize_lexically(&self.root);
+        let normalized = normalize_absolute_lexically(&joined)?;
+        let root = normalize_absolute_lexically(&self.root)?;
         let relative = normalized
             .strip_prefix(&root)
-            .map_err(|_| AppError::PathOutsideRepo(input.display().to_string()))?;
+            .map_err(|_| AppError::from(PathError::OutsideRepo))?;
         repo_path_from_relative(relative).map_err(AppError::from)
     }
 
@@ -113,7 +114,7 @@ impl Git {
             .arg("--no-textconv")
             .arg("HEAD")
             .arg("--")
-            .arg(path.to_path_buf())
+            .arg(path.to_os_path_buf())
             .output()?;
 
         match output.status.code() {
@@ -252,7 +253,7 @@ impl Git {
                 .arg("--no-abbrev")
                 .arg("--format=format:%x00commit%x00%H%x00")
                 .arg("--")
-                .arg(path.to_path_buf());
+                .arg(path.to_os_path_buf());
         })?;
         parse_follow_raw_history(&output, current)
     }
@@ -278,7 +279,7 @@ impl Git {
                 .arg(empty_tree)
                 .arg("HEAD")
                 .arg("--")
-                .arg(file.path.to_path_buf());
+                .arg(file.path.to_os_path_buf());
         })
     }
 
@@ -329,7 +330,7 @@ impl Git {
         path: &RepoPath,
     ) -> Result<Option<TrackedFile>, AppError> {
         let entry = tree
-            .lookup_entry_by_path(path.to_path_buf())
+            .lookup_entry_by_path(path.to_os_path_buf())
             .map_err(|err| git_error("looking up path in tree", err))?;
         match entry {
             Some(entry) => {
