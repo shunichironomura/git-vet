@@ -3,7 +3,7 @@ use std::fmt;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteName(String);
+pub(crate) struct RemoteName(String);
 
 impl RemoteName {
     pub(crate) fn new(input: &str, name_source: RemoteNameSource) -> Result<Self, RemoteError> {

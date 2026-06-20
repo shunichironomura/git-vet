@@ -3,14 +3,14 @@ use std::process::{Command, Output};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum CheckRefFormatError {
+pub(crate) enum CheckRefFormatError {
     #[error("git check-ref-format rejected {ref_name:?}: {details}")]
     Rejected { ref_name: String, details: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
-pub fn check_ref_format(ref_name: &str) -> Result<(), CheckRefFormatError> {
+pub(crate) fn check_ref_format(ref_name: &str) -> Result<(), CheckRefFormatError> {
     let output = Command::new("git")
         .arg("check-ref-format")
         .arg(ref_name)

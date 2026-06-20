@@ -13,7 +13,7 @@ use crate::path::{
 use crate::remote::{RemoteError, RemoteName, RemoteNameSource};
 use crate::review::Vetter;
 
-pub struct Git {
+pub(crate) struct Git {
     pub(crate) repo: gix::Repository,
     pub(crate) root: PathBuf,
     prefix: PathBuf,
@@ -418,7 +418,7 @@ enum RawStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HistoryChangeStatus {
+pub(crate) enum HistoryChangeStatus {
     Added,
     Copied,
     Deleted,
@@ -441,7 +441,7 @@ impl HistoryChangeStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HistoryChange {
+pub(crate) struct HistoryChange {
     pub status: HistoryChangeStatus,
     pub before_path: RepoPath,
     pub after_path: Option<RepoPath>,

@@ -5,6 +5,11 @@ use gix::bstr::ByteSlice;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+/// A non-empty UTF-8 path to a tracked file relative to the repository root.
+///
+/// `RepoPath` is normalized into validated components: it never contains an
+/// absolute prefix, empty component, `.`, `..`, or NUL byte. It renders and
+/// serializes as a Git path, using `/` as the component separator.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct RepoPath {
     components: Vec<RepoPathComponent>,
@@ -94,7 +99,7 @@ pub enum PathError {
     InvalidRepoPath { path: String, details: &'static str },
 }
 
-pub fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
+pub(crate) fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
     let root = normalize_lexically(root);
     let cwd = normalize_lexically(cwd);
     cwd.strip_prefix(&root)
@@ -102,14 +107,14 @@ pub fn prefix_from_cwd(root: &Path, cwd: &Path) -> Result<PathBuf, PathError> {
         .map_err(|_| PathError::PathOutsideRepo(cwd.display().to_string()))
 }
 
-pub fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
+pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, PathError> {
     let path = path
         .to_str()
         .map_err(|err| PathError::NonUtf8Path(err.to_string()))?;
     RepoPath::from_git_path(path)
 }
 
-pub fn normalize_lexically(path: &Path) -> PathBuf {
+pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
     path.components()
         .fold(PathBuf::new(), |mut normalized, component| {
             match component {
@@ -125,7 +130,7 @@ pub fn normalize_lexically(path: &Path) -> PathBuf {
         })
 }
 
-pub fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
+pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
     let components = path
         .components()
         .filter_map(|component| match component {

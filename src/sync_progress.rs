@@ -9,7 +9,7 @@ use crate::error::AppError;
 use crate::remote::RemoteName;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SyncStep {
+pub(crate) enum SyncStep {
     CheckRemote,
     CheckLocal,
     Fetch,
@@ -43,7 +43,7 @@ impl SyncStep {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SyncOutcome {
+pub(crate) enum SyncOutcome {
     FetchedMergedPushed,
     PushedLocalOnly,
     NothingToSync,
@@ -68,21 +68,21 @@ impl SyncOutcome {
 }
 
 #[derive(Debug)]
-pub struct SyncContext<'a> {
+pub(crate) struct SyncContext<'a> {
     pub channel: &'a ReviewChannel,
     pub remote: &'a RemoteName,
     pub notes_ref: &'a NotesRef,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SyncReport {
+pub(crate) struct SyncReport {
     pub channel: ReviewChannel,
     pub remote: RemoteName,
     pub notes_ref: NotesRef,
     pub outcome: SyncOutcome,
 }
 
-pub trait SyncProgress {
+pub(crate) trait SyncProgress {
     fn started(&mut self, context: &SyncContext<'_>) -> Result<(), AppError>;
     fn step_started(&mut self, step: SyncStep) -> Result<(), AppError>;
     fn step_finished(&mut self, step: SyncStep) -> Result<(), AppError>;
@@ -90,13 +90,13 @@ pub trait SyncProgress {
     fn finished(&mut self, report: &SyncReport) -> Result<(), AppError>;
 }
 
-pub enum SyncProgressReporter {
+pub(crate) enum SyncProgressReporter {
     Spinner(SpinnerSyncProgress),
     Plain(PlainSyncProgress),
 }
 
 impl SyncProgressReporter {
-    pub fn from_environment() -> Self {
+    pub(crate) fn from_environment() -> Self {
         if should_use_spinner() {
             Self::Spinner(SpinnerSyncProgress::new())
         } else {
@@ -146,7 +146,7 @@ fn should_use_spinner() -> bool {
     io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none() && env::var_os("CI").is_none()
 }
 
-pub struct SpinnerSyncProgress {
+pub(crate) struct SpinnerSyncProgress {
     spinner: ProgressBar,
     color: bool,
 }
@@ -200,7 +200,7 @@ impl SyncProgress for SpinnerSyncProgress {
     }
 }
 
-pub struct PlainSyncProgress;
+pub(crate) struct PlainSyncProgress;
 
 impl PlainSyncProgress {
     const fn new() -> Self {

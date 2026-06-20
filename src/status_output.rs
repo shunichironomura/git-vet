@@ -10,7 +10,7 @@ use crate::path::RepoPath;
 use crate::review::{ClassifiedFile, ReviewMetadata, ReviewState, Vetter};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HumanStatusOptions {
+pub(crate) struct HumanStatusOptions {
     pub show_all: bool,
     pub color: bool,
 }
@@ -102,7 +102,7 @@ impl Color {
     }
 }
 
-pub fn json_status(
+pub(crate) fn json_status(
     channel: &ReviewChannel,
     classified: &[ClassifiedFile],
 ) -> Result<String, AppError> {
@@ -125,7 +125,7 @@ pub fn json_status(
         .map_err(AppError::from)
 }
 
-pub fn human_status(
+pub(crate) fn human_status(
     channel: &ReviewChannel,
     classified: &[ClassifiedFile],
     options: HumanStatusOptions,
@@ -182,7 +182,7 @@ pub fn human_status(
     output
 }
 
-pub fn check_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) -> String {
+pub(crate) fn check_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) -> String {
     let counts = StatusCounts::from_classified(classified);
     let mut output = String::new();
 

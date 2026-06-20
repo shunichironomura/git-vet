@@ -6,7 +6,7 @@ use crate::git_types::{BlobOid, CommitOid};
 use crate::path::RepoPath;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Vetter {
+pub(crate) struct Vetter {
     pub(crate) name: String,
     pub(crate) email: String,
 }
@@ -18,7 +18,7 @@ impl Vetter {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewRecord {
+pub(crate) struct ReviewRecord {
     pub(crate) vetted_at: String,
     pub(crate) vetted_by: Vetter,
     pub(crate) commit: CommitOid,
@@ -32,7 +32,7 @@ impl ReviewRecord {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ReviewInfo {
+pub(crate) struct ReviewInfo {
     pub(crate) records: Vec<ReviewRecord>,
 }
 
@@ -49,13 +49,13 @@ impl ReviewInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewMetadata {
+pub(crate) struct ReviewMetadata {
     pub(crate) last_vetted_at: String,
     pub(crate) vetted_by: Vetter,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ReviewedSet {
+pub(crate) struct ReviewedSet {
     pub(crate) by_blob: HashMap<BlobOid, ReviewInfo>,
 }
 
@@ -74,7 +74,7 @@ impl ReviewedSet {
 }
 
 #[derive(Clone, Debug)]
-pub enum ReviewState {
+pub(crate) enum ReviewState {
     Vetted,
     Stale { baseline: BlobOid },
     New,
@@ -98,14 +98,14 @@ impl ReviewState {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClassifiedFile {
+pub(crate) struct ClassifiedFile {
     pub(crate) path: RepoPath,
     pub(crate) state: ReviewState,
     pub(crate) blob: BlobOid,
     pub(crate) metadata: Option<ReviewMetadata>,
 }
 
-pub fn append_record(
+pub(crate) fn append_record(
     existing: Option<&str>,
     new_record: &ReviewRecord,
 ) -> Result<String, serde_json::Error> {
@@ -139,7 +139,7 @@ pub fn append_record(
     }
 }
 
-pub fn parse_note_records(body: &str) -> Vec<ReviewRecord> {
+pub(crate) fn parse_note_records(body: &str) -> Vec<ReviewRecord> {
     body.lines().filter_map(parse_note_record).collect()
 }
 

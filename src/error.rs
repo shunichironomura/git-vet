@@ -71,7 +71,7 @@ impl From<ChannelError> for AppError {
     }
 }
 
-pub fn git_error(operation: &'static str, source: impl fmt::Display) -> AppError {
+pub(crate) fn git_error(operation: &'static str, source: impl fmt::Display) -> AppError {
     AppError::Git {
         operation,
         details: source.to_string(),

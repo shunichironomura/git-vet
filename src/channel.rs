@@ -4,10 +4,10 @@ use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 const NOTES_REF_PREFIX: &str = "refs/notes/vet";
-pub const DEFAULT_REVIEW_CHANNEL: &str = "default";
+pub(crate) const DEFAULT_REVIEW_CHANNEL: &str = "default";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewChannel {
+pub(crate) struct ReviewChannel {
     name: String,
     notes_ref: NotesRef,
 }
@@ -23,7 +23,7 @@ impl ReviewChannel {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewChannelCandidate {
+pub(crate) struct ReviewChannelCandidate {
     name: String,
     notes_ref_name: String,
 }
@@ -88,7 +88,7 @@ impl fmt::Display for ReviewChannel {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NotesRef {
+pub(crate) struct NotesRef {
     name: String,
 }
 

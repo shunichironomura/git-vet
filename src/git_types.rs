@@ -30,7 +30,7 @@ impl fmt::Display for BlobOid {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct CommitOid(gix::ObjectId);
+pub(crate) struct CommitOid(gix::ObjectId);
 
 impl CommitOid {
     pub(crate) const fn new(oid: gix::ObjectId) -> Self {
@@ -45,7 +45,7 @@ impl fmt::Display for CommitOid {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FileMode(EntryMode);
+pub(crate) struct FileMode(EntryMode);
 
 impl FileMode {
     pub(crate) const fn new(mode: EntryMode) -> Self {
@@ -62,7 +62,7 @@ impl FileMode {
 }
 
 #[derive(Clone, Debug)]
-pub struct TrackedFile {
+pub(crate) struct TrackedFile {
     pub(crate) path: RepoPath,
     pub(crate) blob: BlobOid,
 }
