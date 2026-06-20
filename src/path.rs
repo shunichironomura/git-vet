@@ -162,6 +162,9 @@ pub(crate) fn repo_path_from_bstr(path: &gix::bstr::BStr) -> Result<RepoPath, Pa
 ///
 /// This removes `.` components and applies `..` components with `PathBuf::pop`.
 /// It does not resolve symlinks or require the path to exist.
+///
+/// TODO: Replace this implementation with `Path::normalize_lexically()` once
+/// that standard-library API is stabilized.
 pub(crate) fn normalize_absolute_lexically(path: &Path) -> Result<PathBuf, PathError> {
     if !path.is_absolute() {
         return Err(PathError::NonAbsolute);
