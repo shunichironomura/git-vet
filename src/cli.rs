@@ -3,14 +3,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::channel::{ChannelError, DEFAULT_REVIEW_CHANNEL, ReviewChannel, ReviewChannelCandidate};
+use crate::channel::{ChannelError, DEFAULT_REVIEW_CHANNEL, ReviewChannel};
 use crate::commands::{
     DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, sync_notes,
     unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
-use crate::git_ref_format::{CheckRefFormatError, check_ref_format};
 use crate::notes::{GitNotesStore, NotesStore};
 use crate::sync_progress::SyncProgressReporter;
 
@@ -139,40 +138,18 @@ fn review_channel_from_input(
     input: &str,
     source: ReviewChannelSource,
 ) -> Result<ReviewChannel, AppError> {
-    let candidate = ReviewChannelCandidate::new(input)
-        .map_err(|error| channel_error_from_source(error, source))?;
-
-    // Channel validity is exact Git refname validity for the concrete notes ref
-    // git-vet will use: refs/notes/vet/<channel>. Keep the Git subprocess at
-    // the CLI/config boundary instead of making ReviewChannel construction
-    // impure.
-    let checked_ref = match check_ref_format(candidate.notes_ref_name()) {
-        Ok(checked_ref) => checked_ref,
-        Err(CheckRefFormatError::Rejected { ref_name, details }) => {
-            return Err(ChannelError {
-                channel: input.to_owned(),
-                details: details_from_source(
-                    format!("`git check-ref-format` rejected {ref_name:?}: {details}"),
-                    source,
-                ),
-            }
-            .into());
-        }
-        Err(CheckRefFormatError::Io(error)) => return Err(AppError::Io(error)),
-    };
-
-    let validated = candidate
-        .into_validated(checked_ref)
-        .map_err(|error| channel_error_from_source(error, source))?;
-    Ok(ReviewChannel::from_validated_candidate(validated))
+    ReviewChannel::new(input).map_err(|error| channel_error_from_source(input, &error, source))
 }
 
-fn channel_error_from_source(error: ChannelError, source: ReviewChannelSource) -> AppError {
-    ChannelError {
-        channel: error.channel,
-        details: details_from_source(error.details, source),
+fn channel_error_from_source(
+    input: &str,
+    error: &ChannelError,
+    source: ReviewChannelSource,
+) -> AppError {
+    AppError::InvalidChannel {
+        channel: input.to_owned(),
+        details: details_from_source(error.to_string(), source),
     }
-    .into()
 }
 
 fn details_from_source(details: String, source: ReviewChannelSource) -> String {

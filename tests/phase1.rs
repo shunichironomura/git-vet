@@ -776,7 +776,7 @@ fn invalid_vet_channel_config_is_rejected_unless_explicit_channel_is_set() {
         "{configured_stderr}"
     );
     assert!(
-        configured_stderr.contains("git check-ref-format"),
+        configured_stderr.contains("valid Git ref name"),
         "{configured_stderr}"
     );
 
@@ -791,13 +791,13 @@ fn invalid_vet_channel_config_is_rejected_unless_explicit_channel_is_set() {
 }
 
 #[test]
-fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
+fn invalid_channel_names_are_rejected_by_git_ref_validation() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
     repo.commit_all("initial");
 
-    // Channel validation intentionally delegates exact refname compatibility to
-    // `git check-ref-format refs/notes/vet/<channel>`.
+    // Channel validation checks exact refname compatibility for
+    // `refs/notes/vet/<channel>`.
     for channel in [
         "bad..channel",
         ".hidden",
@@ -811,7 +811,7 @@ fn invalid_channel_names_are_rejected_by_git_check_ref_format() {
         assert_eq!(output.status.code(), Some(2), "channel {channel:?}");
         let stderr = stderr(&output);
         assert!(stderr.contains("invalid review channel"), "{stderr}");
-        assert!(stderr.contains("git check-ref-format"), "{stderr}");
+        assert!(stderr.contains("valid Git ref name"), "{stderr}");
     }
 }
 
