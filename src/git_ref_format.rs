@@ -2,33 +2,40 @@ use std::process::{Command, Output};
 
 use thiserror::Error;
 
-use crate::channel::{ReviewChannelCandidate, ValidatedReviewChannelCandidate};
+/// Proof that a concrete Git ref name was accepted by `git check-ref-format`
+/// without normalization.
+///
+/// The inner string is private so callers cannot fabricate this proof without
+/// going through [`check_ref_format`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StrictGitRefName {
+    name: String,
+}
 
+impl StrictGitRefName {
+    /// Consume the proof and return the exact ref name that Git accepted.
+    pub(crate) fn into_string(self) -> String {
+        self.name
+    }
+}
+
+/// Error returned while checking a ref name with `git check-ref-format`.
 #[derive(Debug, Error)]
 pub(crate) enum CheckRefFormatError {
+    /// Git ran successfully but rejected the supplied ref name.
     #[error("git check-ref-format rejected {ref_name:?}: {details}")]
     Rejected { ref_name: String, details: String },
+    /// The `git check-ref-format` process could not be executed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
-/// Proof that `value`'s concrete Git ref name was accepted by strict
-/// `git check-ref-format` validation, without `--normalize`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StrictGitRefFormatValidated<T> {
-    value: T,
-}
-
-impl ValidatedReviewChannelCandidate for StrictGitRefFormatValidated<ReviewChannelCandidate> {
-    fn into_candidate(self) -> ReviewChannelCandidate {
-        self.value
-    }
-}
-
-pub(crate) fn check_ref_format(
-    candidate: ReviewChannelCandidate,
-) -> Result<StrictGitRefFormatValidated<ReviewChannelCandidate>, CheckRefFormatError> {
-    let ref_name = candidate.notes_ref_name().to_owned();
+/// Run strict `git check-ref-format` validation for `ref_name`.
+///
+/// This intentionally does not pass `--normalize`; success proves the exact
+/// input string is a valid Git ref name as-is.
+pub(crate) fn check_ref_format(ref_name: &str) -> Result<StrictGitRefName, CheckRefFormatError> {
+    let ref_name = ref_name.to_owned();
     let output = Command::new("git")
         .arg("check-ref-format")
         .arg(&ref_name)
@@ -38,7 +45,7 @@ pub(crate) fn check_ref_format(
         .output()?;
 
     if output.status.success() {
-        Ok(StrictGitRefFormatValidated { value: candidate })
+        Ok(StrictGitRefName { name: ref_name })
     } else {
         Err(CheckRefFormatError::Rejected {
             ref_name,

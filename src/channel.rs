@@ -1,7 +1,10 @@
 use std::fmt;
+use std::marker::PhantomData;
 
 use serde::{Serialize, Serializer};
 use thiserror::Error;
+
+use crate::git_ref_format::StrictGitRefName;
 
 const NOTES_REF_PREFIX: &str = "refs/notes/vet";
 pub(crate) const DEFAULT_REVIEW_CHANNEL: &str = "default";
@@ -25,12 +28,21 @@ impl ReviewChannel {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewChannelCandidate {
+pub(crate) enum Unvalidated {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Validated {}
+
+pub(crate) type ValidatedReviewChannelCandidate = ReviewChannelCandidate<Validated>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewChannelCandidate<State = Unvalidated> {
     name: String,
     notes_ref_name: String,
+    _state: PhantomData<State>,
 }
 
-impl ReviewChannelCandidate {
+impl ReviewChannelCandidate<Unvalidated> {
     pub(crate) fn new(input: &str) -> Result<Self, ChannelError> {
         if input.is_empty() {
             return Err(ChannelError {
@@ -48,23 +60,46 @@ impl ReviewChannelCandidate {
         Ok(Self {
             name: input.to_owned(),
             notes_ref_name: format!("{NOTES_REF_PREFIX}/{input}"),
+            _state: PhantomData,
         })
     }
 
+    pub(crate) fn into_validated(
+        self,
+        checked_ref: StrictGitRefName,
+    ) -> Result<ValidatedReviewChannelCandidate, ChannelError> {
+        let Self {
+            name,
+            notes_ref_name,
+            _state,
+        } = self;
+
+        let checked_ref_name = checked_ref.into_string();
+        if checked_ref_name != notes_ref_name {
+            return Err(ChannelError {
+                channel: name,
+                details: format!(
+                    "validated Git ref {checked_ref_name:?} does not match channel notes ref {notes_ref_name:?}"
+                ),
+            });
+        }
+
+        Ok(ReviewChannelCandidate {
+            name,
+            notes_ref_name,
+            _state: PhantomData,
+        })
+    }
+}
+
+impl<State> ReviewChannelCandidate<State> {
     pub(crate) fn notes_ref_name(&self) -> &str {
         &self.notes_ref_name
     }
 }
 
-pub(crate) trait ValidatedReviewChannelCandidate {
-    fn into_candidate(self) -> ReviewChannelCandidate;
-}
-
 impl ReviewChannel {
-    pub(crate) fn from_validated_candidate(
-        candidate: impl ValidatedReviewChannelCandidate,
-    ) -> Self {
-        let candidate = candidate.into_candidate();
+    pub(crate) fn from_validated_candidate(candidate: ValidatedReviewChannelCandidate) -> Self {
         Self {
             name: candidate.name,
             notes_ref: NotesRef {

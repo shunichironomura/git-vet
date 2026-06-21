@@ -287,9 +287,12 @@ mod tests {
     use crate::remote::RemoteNameSource;
 
     fn report(outcome: SyncOutcome) -> SyncReport {
+        let candidate = ReviewChannelCandidate::new("default").expect("valid candidate");
+        let checked_ref = check_ref_format(candidate.notes_ref_name()).expect("valid ref");
         let channel = ReviewChannel::from_validated_candidate(
-            check_ref_format(ReviewChannelCandidate::new("default").expect("valid candidate"))
-                .expect("valid ref"),
+            candidate
+                .into_validated(checked_ref)
+                .expect("validated candidate"),
         );
         SyncReport {
             notes_ref: channel.notes_ref().clone(),

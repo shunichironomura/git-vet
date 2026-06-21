@@ -7,9 +7,9 @@
 The library modules form a directed acyclic graph (DAG). The list below is topologically sorted from low-level domain/support modules to the CLI shell:
 
 1. `path` — repository-relative UTF-8 path type, lexical normalization helpers, and current-working-directory/Git-prefix conversion.
-2. `channel` — review channels, default channel selection, typed Git notes refs (`refs/notes/vet/<channel>`), and channel validation errors.
-3. `remote` — typed sync remote names, remote-name provenance, and remote-selection errors.
-4. `git_ref_format` — small boundary adapter for `git check-ref-format` used to validate concrete channel notes refs.
+2. `git_ref_format` — small boundary adapter for strict `git check-ref-format` validation. It owns the unforgeable `StrictGitRefName` proof type returned only after Git accepts a concrete ref name without normalization.
+3. `channel` — review channels, type-state channel candidates, default channel selection, typed Git notes refs (`refs/notes/vet/<channel>`), and channel validation errors. It converts an unvalidated channel candidate into a validated candidate only when given a matching `StrictGitRefName` proof.
+4. `remote` — typed sync remote names, remote-name provenance, and remote-selection errors.
 5. `git_types` — typed Git object IDs, file modes, tracked files, and commit/blob display/serialization wrappers.
 6. `review` — review records, vetter identity, reviewed sets, derived review states, classified files, and note-record parsing/rendering/sort-deduplication.
 7. `error` — application error type and conversions from lower-level path/channel/remote/JSON/I/O/Git errors.
