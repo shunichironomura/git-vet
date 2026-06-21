@@ -2,7 +2,6 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::channel::ChannelError;
 use crate::path::{PathError, RepoPath};
 use crate::remote::RemoteError;
 
@@ -69,15 +68,6 @@ impl From<PathError> for AppError {
             PathError::NulByte => Self::InvalidRepoPath {
                 details: "path contains a NUL byte",
             },
-        }
-    }
-}
-
-impl From<ChannelError> for AppError {
-    fn from(error: ChannelError) -> Self {
-        Self::InvalidChannel {
-            channel: error.channel,
-            details: error.details,
         }
     }
 }

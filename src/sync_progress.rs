@@ -282,13 +282,11 @@ fn paint(text: &str, color: Color, enabled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channel::ReviewChannelCandidate;
+    use crate::channel::ReviewChannel;
     use crate::remote::RemoteNameSource;
 
     fn report(outcome: SyncOutcome) -> SyncReport {
-        let channel = ReviewChannelCandidate::new("default")
-            .expect("valid candidate")
-            .into_channel_after_git_check_ref_format();
+        let channel = ReviewChannel::new("default").expect("valid channel");
         SyncReport {
             notes_ref: channel.notes_ref().clone(),
             channel,

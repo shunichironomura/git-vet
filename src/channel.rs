@@ -1,11 +1,13 @@
 use std::fmt;
 
+use gix::bstr::ByteSlice;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 const NOTES_REF_PREFIX: &str = "refs/notes/vet";
 pub(crate) const DEFAULT_REVIEW_CHANNEL: &str = "default";
 
+/// A review channel whose notes ref has been validated as a Git ref name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewChannel {
     name: String,
@@ -13,6 +15,25 @@ pub(crate) struct ReviewChannel {
 }
 
 impl ReviewChannel {
+    pub(crate) fn new(input: &str) -> Result<Self, ChannelError> {
+        if input.is_empty() {
+            return Err(ChannelError::Empty);
+        }
+        if input.contains('/') {
+            return Err(ChannelError::ContainsSlash);
+        }
+
+        let notes_ref_name = format!("{NOTES_REF_PREFIX}/{input}");
+        validate_notes_ref(&notes_ref_name)?;
+
+        Ok(Self {
+            name: input.to_owned(),
+            notes_ref: NotesRef {
+                name: notes_ref_name,
+            },
+        })
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.name
     }
@@ -22,53 +43,13 @@ impl ReviewChannel {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewChannelCandidate {
-    name: String,
-    notes_ref_name: String,
-}
-
-impl ReviewChannelCandidate {
-    pub(crate) fn new(input: &str) -> Result<Self, ChannelError> {
-        if input.is_empty() {
-            return Err(ChannelError {
-                channel: input.to_owned(),
-                details: "channel name must not be empty".to_owned(),
-            });
-        }
-        if input.contains('/') {
-            return Err(ChannelError {
-                channel: input.to_owned(),
-                details: "channel name must not contain '/'".to_owned(),
-            });
-        }
-
-        Ok(Self {
-            name: input.to_owned(),
-            notes_ref_name: format!("{NOTES_REF_PREFIX}/{input}"),
-        })
-    }
-
-    pub(crate) fn notes_ref_name(&self) -> &str {
-        &self.notes_ref_name
-    }
-
-    /// Convert only after the caller has validated `notes_ref_name()` with
-    /// `git check-ref-format` without normalization.
-    pub(crate) fn into_channel_after_git_check_ref_format(self) -> ReviewChannel {
-        ReviewChannel {
-            name: self.name,
-            notes_ref: NotesRef {
-                name: self.notes_ref_name,
-            },
-        }
-    }
-
-    pub(crate) fn channel_error(&self, details: String) -> ChannelError {
-        ChannelError {
-            channel: self.name.clone(),
-            details,
-        }
+fn validate_notes_ref(notes_ref_name: &str) -> Result<(), ChannelError> {
+    match gix::validate::reference::name(notes_ref_name.as_bytes().as_bstr()) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(ChannelError::InvalidNotesRef {
+            notes_ref: notes_ref_name.to_owned(),
+            validation_error: error.to_string(),
+        }),
     }
 }
 
@@ -105,8 +86,14 @@ impl fmt::Display for NotesRef {
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
-#[error("invalid review channel {channel:?}: {details}")]
-pub struct ChannelError {
-    pub(crate) channel: String,
-    pub(crate) details: String,
+pub(crate) enum ChannelError {
+    #[error("channel name must not be empty")]
+    Empty,
+    #[error("channel name must not contain '/'")]
+    ContainsSlash,
+    #[error("notes ref {notes_ref:?} is not a valid Git ref name: {validation_error}")]
+    InvalidNotesRef {
+        notes_ref: String,
+        validation_error: String,
+    },
 }
