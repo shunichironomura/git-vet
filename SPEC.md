@@ -141,7 +141,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 |---|---|
 | `git vet mark [--allow-dirty] <paths…>` | Sign off the current blob of each path in the selected channel: append a review record note in `refs/notes/vet/<channel>` keyed on `HEAD:<path>`. Idempotent. |
 | `git vet status [--json] [--check]` | Classify every in-scope tracked file (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. |
-| `git vet diff <path>` | Show the change that still needs review for `<path>` in the selected channel: the cumulative diff from its last-reviewed version to `HEAD` (§7.2). |
+| `git vet diff [--worktree] <path>` | Show the change that still needs review for `<path>` in the selected channel: the cumulative diff from its last-reviewed version to `HEAD`, or to the local working-tree file with `--worktree` (§7.2). |
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
 | `git vet unmark <paths…>` | Remove the note on the current blob of each path in the selected channel, forcing re-review. (Affects all paths sharing that blob in that channel — see §9.) |
@@ -188,6 +188,15 @@ classify(path):
   Stale(base)   -> diff base → cur for this path (cumulative change since last sign-off)
 ```
 
+With `--worktree`, use the same baseline selection but compare to the local working-tree file instead of `HEAD`:
+
+```
+classify(path):
+  Vetted        -> diff cur → worktree(path)
+  New           -> diff empty-tree → worktree(path)
+  Stale(base)   -> diff base → worktree(path)
+```
+
 Binary files: defer to Git's binary-diff behavior; "full review" of a binary means inspecting it out of band.
 
 ### 7.3 Release gate (`status --check`)
@@ -212,7 +221,7 @@ The gate never walks history: an unreviewed file fails regardless of whether it 
 
 1. Code lands on `main` through the normal, lightweight PR pipeline — no `git-vet` involvement, nothing blocked.
 2. In parallel, on your own schedule, you review files. `git vet status` shows the backlog (`new` + `stale`) for the default channel; use `--channel <name>` for another review pipeline.
-3. For a file, `git vet diff <path>` (or `git vet review <path>`) shows what to read in the selected channel — the whole file if `new`, just the change since the last sign-off in that channel if `stale`.
+3. For a file, `git vet diff <path>` (or `git vet review <path>`) shows what to read in the selected channel — the whole file if `new`, just the change since the last sign-off in that channel if `stale`. Use `git vet diff --worktree <path>` to include uncommitted local edits in the review diff.
 4. `git vet mark <path>` signs off the current content in the selected channel.
 5. Any subsequent edit by anyone produces a new blob, dropping the file back into the backlog automatically.
 6. `git vet sync` shares the selected channel's state across machines/teammates.

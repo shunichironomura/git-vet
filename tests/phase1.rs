@@ -944,6 +944,66 @@ fn diff_for_new_and_stale_files_shows_git_diffs() {
 }
 
 #[test]
+fn diff_worktree_compares_latest_vetted_content_to_dirty_worktree() {
+    let repo = TestRepo::new();
+    repo.write("dir/a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "dir/a.txt"]).status.success());
+
+    repo.write("dir/a.txt", "hello\nlocal\n");
+
+    let head_diff = repo.run_vet(&["diff", "dir/a.txt"]);
+    assert!(
+        head_diff.status.success(),
+        "HEAD diff failed: {}",
+        stderr(&head_diff)
+    );
+    assert!(stdout(&head_diff).contains("dir/a.txt is up to date"));
+
+    let worktree_diff = repo.run_vet(&["diff", "--worktree", "dir/a.txt"]);
+    assert!(
+        worktree_diff.status.success(),
+        "worktree diff failed: {}",
+        stderr(&worktree_diff)
+    );
+    let worktree_diff = stdout(&worktree_diff);
+    assert!(worktree_diff.contains("diff --git "), "{worktree_diff}");
+    assert!(worktree_diff.contains("+local"), "{worktree_diff}");
+}
+
+#[test]
+fn diff_worktree_for_stale_file_includes_committed_and_uncommitted_changes() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    repo.write("a.txt", "base\nhead\n");
+    repo.commit_all("edit");
+    repo.write("a.txt", "base\nhead\nlocal\n");
+
+    let head_diff = repo.run_vet(&["diff", "a.txt"]);
+    assert!(
+        head_diff.status.success(),
+        "diff failed: {}",
+        stderr(&head_diff)
+    );
+    let head_diff = stdout(&head_diff);
+    assert!(head_diff.contains("+head"), "{head_diff}");
+    assert!(!head_diff.contains("+local"), "{head_diff}");
+
+    let worktree_diff = repo.run_vet(&["diff", "--worktree", "a.txt"]);
+    assert!(
+        worktree_diff.status.success(),
+        "worktree diff failed: {}",
+        stderr(&worktree_diff)
+    );
+    let worktree_diff = stdout(&worktree_diff);
+    assert!(worktree_diff.contains("+head"), "{worktree_diff}");
+    assert!(worktree_diff.contains("+local"), "{worktree_diff}");
+}
+
+#[test]
 fn diff_uses_git_diff_machinery() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
