@@ -5,8 +5,8 @@ use clap::{Parser, Subcommand};
 
 use crate::channel::{ChannelError, DEFAULT_REVIEW_CHANNEL, ReviewChannel};
 use crate::commands::{
-    DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status, sync_notes,
-    unmark_paths,
+    DiffTarget, DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status,
+    sync_notes, unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
@@ -55,7 +55,12 @@ enum CommandKind {
         check: bool,
     },
     /// Show the diff that still needs review for a tracked file.
-    Diff { path: PathBuf },
+    Diff {
+        /// Compare the latest vetted content with the working tree instead of HEAD.
+        #[arg(long)]
+        worktree: bool,
+        path: PathBuf,
+    },
     /// Fetch, merge, and push review notes for the selected channel.
     Sync {
         /// Remote to sync with. Overrides vet.syncRemote and origin fallback.
@@ -92,8 +97,13 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
                 Gate::Closed => Ok(ExitCode::from(1)),
             }
         }
-        CommandKind::Diff { path } => {
-            diff_path(&git, &notes, &path)?;
+        CommandKind::Diff { path, worktree } => {
+            let target = if worktree {
+                DiffTarget::Worktree
+            } else {
+                DiffTarget::Head
+            };
+            diff_path(&git, &notes, &path, target)?;
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Sync { remote } => {

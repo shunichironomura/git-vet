@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use gix::bstr::ByteSlice;
 
@@ -67,6 +70,7 @@ impl Git {
                 Ok(TrackedFile {
                     path: repo_path_from_bstr(entry.filepath.as_bstr())?,
                     blob: BlobOid::new(entry.oid),
+                    mode: FileMode::new(entry.mode),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
@@ -283,6 +287,17 @@ impl Git {
         })
     }
 
+    pub(crate) fn diff_empty_to_worktree(&self, file: &TrackedFile) -> Result<(), AppError> {
+        let empty_tree = gix::ObjectId::empty_tree(self.repo.object_hash()).to_string();
+        self.stream_git_diff(|command| {
+            command
+                .arg("diff")
+                .arg(empty_tree)
+                .arg("--")
+                .arg(file.path.to_os_path_buf());
+        })
+    }
+
     pub(crate) fn diff_blobs(&self, baseline: &BlobOid, current: &BlobOid) -> Result<(), AppError> {
         self.stream_git_diff(|command| {
             command
@@ -290,6 +305,57 @@ impl Git {
                 .arg(baseline.to_string())
                 .arg(current.to_string());
         })
+    }
+
+    pub(crate) fn diff_blob_to_worktree(
+        &self,
+        baseline: &BlobOid,
+        file: &TrackedFile,
+    ) -> Result<(), AppError> {
+        let baseline_index = self.synthetic_index_with_blob(file, baseline)?;
+        self.stream_git_diff(|command| {
+            command
+                .env("GIT_INDEX_FILE", baseline_index.path())
+                .arg("diff")
+                .arg("--")
+                .arg(file.path.to_os_path_buf());
+        })
+    }
+
+    fn synthetic_index_with_blob(
+        &self,
+        file: &TrackedFile,
+        blob: &BlobOid,
+    ) -> Result<TempIndex, AppError> {
+        let index = TempIndex::new()?;
+        let mut input = Vec::new();
+        input.extend_from_slice(
+            format!("{} blob {}\t", file.mode.as_tree_entry_mode(), blob).as_bytes(),
+        );
+        input.extend_from_slice(file.path.to_string().as_bytes());
+        input.push(0);
+
+        let mut command = self.git_command();
+        let mut child = command
+            .env("GIT_INDEX_FILE", index.path())
+            .arg("update-index")
+            .arg("-z")
+            .arg("--index-info")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(git_error(
+                "creating synthetic diff index",
+                "failed to open git update-index stdin",
+            ));
+        };
+        stdin.write_all(&input)?;
+        drop(stdin);
+
+        let output = child.wait_with_output()?;
+        stdout_from_success("creating synthetic diff index", output)?;
+        Ok(index)
     }
 
     fn stream_git_diff(&self, configure: impl FnOnce(&mut Command)) -> Result<(), AppError> {
@@ -342,6 +408,7 @@ impl Git {
                     Ok(Some(TrackedFile {
                         path: path.clone(),
                         blob: BlobOid::new(entry.object_id()),
+                        mode,
                     }))
                 } else {
                     Ok(None)
@@ -349,6 +416,50 @@ impl Git {
             }
             None => Ok(None),
         }
+    }
+}
+
+#[derive(Debug)]
+struct TempIndex {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl TempIndex {
+    fn new() -> Result<Self, AppError> {
+        let base = env::temp_dir();
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+
+        for attempt in 0..1000 {
+            let dir = base.join(format!("git-vet-index-{pid}-{nanos}-{attempt}"));
+            match fs::create_dir(&dir) {
+                Ok(()) => {
+                    let path = dir.join("index");
+                    return Ok(Self { dir, path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a unique temporary index directory",
+        )
+        .into())
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempIndex {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 

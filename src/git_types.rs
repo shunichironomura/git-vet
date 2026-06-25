@@ -52,6 +52,10 @@ impl FileMode {
         Self(mode)
     }
 
+    pub(crate) fn as_tree_entry_mode(self) -> String {
+        format!("{:o}", self.0)
+    }
+
     pub(crate) const fn is_reviewable_file(self) -> bool {
         self.0.is_blob_or_symlink()
     }
@@ -65,4 +69,5 @@ impl FileMode {
 pub(crate) struct TrackedFile {
     pub(crate) path: RepoPath,
     pub(crate) blob: BlobOid,
+    pub(crate) mode: FileMode,
 }

@@ -27,8 +27,11 @@ git-vet status
 # See the vetting backlog for the default channel
 git vet status
 
-# Inspect what needs vetting for a file
+# Inspect what needs vetting for a file at HEAD
 git vet diff src/lib.rs
+
+# Include uncommitted working-tree edits in the diff
+git vet diff --worktree src/lib.rs
 
 # Mark the file's current HEAD content as vetted
 git vet mark src/lib.rs
@@ -53,14 +56,14 @@ git vet status --check
 - `stale`: an earlier version was vetted, but the current `HEAD` content has changed.
 - `vetted`: the current `HEAD` content is vetted.
 
-For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. For `stale` files, it shows the cumulative diff since the last vetted version.
+For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. For `stale` files, it shows the cumulative diff since the last vetted version. Add `--worktree` to compare the latest vetted content with the local working-tree file instead of committed `HEAD`.
 
 ## Commands
 
 - `git vet status` — show vetting state for tracked files.
 - `git vet status --json` — emit stable JSON.
 - `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
-- `git vet diff <path>` — show the diff that still needs vetting.
+- `git vet diff [--worktree] <path>` — show the diff that still needs vetting; `--worktree` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet prune` — prune stale Git-note entries.

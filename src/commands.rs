@@ -30,6 +30,12 @@ pub(crate) struct MarkOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffTarget {
+    Head,
+    Worktree,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirtyPathHandling {
     Prompt,
     Allow,
@@ -162,16 +168,45 @@ fn human_status_color_enabled() -> bool {
     io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
 }
 
-pub(crate) fn diff_path(git: &Git, notes: &impl NotesStore, path: &Path) -> Result<(), AppError> {
+pub(crate) fn diff_path(
+    git: &Git,
+    notes: &impl NotesStore,
+    path: &Path,
+    target: DiffTarget,
+) -> Result<(), AppError> {
     let path = git.normalize_user_path(path)?;
     let file = git.blob_at_head(&path)?;
     let reviewed = notes.list_reviewed()?;
     let classified = classify_path(git, &file, &reviewed)?;
 
-    match classified.state {
+    match target {
+        DiffTarget::Head => diff_classified_head(git, &path, &file, &classified.state),
+        DiffTarget::Worktree => diff_classified_worktree(git, &file, &classified.state),
+    }
+}
+
+fn diff_classified_head(
+    git: &Git,
+    path: &RepoPath,
+    file: &TrackedFile,
+    state: &ReviewState,
+) -> Result<(), AppError> {
+    match state {
         ReviewState::Vetted => stdout_line(format_args!("{path} is up to date")),
-        ReviewState::New => git.diff_empty_to_head(&file),
-        ReviewState::Stale { baseline } => git.diff_blobs(&baseline, &file.blob),
+        ReviewState::New => git.diff_empty_to_head(file),
+        ReviewState::Stale { baseline } => git.diff_blobs(baseline, &file.blob),
+    }
+}
+
+fn diff_classified_worktree(
+    git: &Git,
+    file: &TrackedFile,
+    state: &ReviewState,
+) -> Result<(), AppError> {
+    match state {
+        ReviewState::Vetted => git.diff_blob_to_worktree(&file.blob, file),
+        ReviewState::New => git.diff_empty_to_worktree(file),
+        ReviewState::Stale { baseline } => git.diff_blob_to_worktree(baseline, file),
     }
 }
 
@@ -520,6 +555,7 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+    use crate::git_types::FileMode;
     use crate::review::ReviewInfo;
 
     fn dirty_paths() -> Result<Vec<RepoPath>, AppError> {
@@ -536,7 +572,14 @@ mod tests {
         Ok(TrackedFile {
             path: RepoPath::from_git_path(path)?,
             blob,
+            mode: regular_file_mode()?,
         })
+    }
+
+    fn regular_file_mode() -> Result<FileMode, AppError> {
+        gix::objs::tree::EntryMode::try_from(0o100_644)
+            .map(FileMode::new)
+            .map_err(|mode| crate::error::git_error("creating test file mode", mode))
     }
 
     fn change(
