@@ -969,7 +969,7 @@ fn diff_for_new_and_stale_files_shows_git_diffs() {
 }
 
 #[test]
-fn diff_worktree_compares_latest_vetted_content_to_dirty_worktree() {
+fn diff_workspace_compares_latest_vetted_content_to_dirty_worktree() {
     let repo = TestRepo::new();
     repo.write("dir/a.txt", "hello\n");
     repo.commit_all("initial");
@@ -985,19 +985,19 @@ fn diff_worktree_compares_latest_vetted_content_to_dirty_worktree() {
     );
     assert!(stdout(&head_diff).contains("dir/a.txt is up to date"));
 
-    let worktree_diff = repo.run_vet(&["diff", "--worktree", "dir/a.txt"]);
+    let workspace_diff = repo.run_vet(&["diff", "--workspace", "dir/a.txt"]);
     assert!(
-        worktree_diff.status.success(),
-        "worktree diff failed: {}",
-        stderr(&worktree_diff)
+        workspace_diff.status.success(),
+        "workspace diff failed: {}",
+        stderr(&workspace_diff)
     );
-    let worktree_diff = stdout(&worktree_diff);
-    assert!(worktree_diff.contains("diff --git "), "{worktree_diff}");
-    assert!(worktree_diff.contains("+local"), "{worktree_diff}");
+    let workspace_diff = stdout(&workspace_diff);
+    assert!(workspace_diff.contains("diff --git "), "{workspace_diff}");
+    assert!(workspace_diff.contains("+local"), "{workspace_diff}");
 }
 
 #[test]
-fn diff_worktree_for_stale_file_includes_committed_and_uncommitted_changes() {
+fn diff_workspace_for_stale_file_includes_committed_and_uncommitted_changes() {
     let repo = TestRepo::new();
     repo.write("a.txt", "base\n");
     repo.commit_all("initial");
@@ -1017,15 +1017,15 @@ fn diff_worktree_for_stale_file_includes_committed_and_uncommitted_changes() {
     assert!(head_diff.contains("+head"), "{head_diff}");
     assert!(!head_diff.contains("+local"), "{head_diff}");
 
-    let worktree_diff = repo.run_vet(&["diff", "--worktree", "a.txt"]);
+    let workspace_diff = repo.run_vet(&["diff", "--workspace", "a.txt"]);
     assert!(
-        worktree_diff.status.success(),
-        "worktree diff failed: {}",
-        stderr(&worktree_diff)
+        workspace_diff.status.success(),
+        "workspace diff failed: {}",
+        stderr(&workspace_diff)
     );
-    let worktree_diff = stdout(&worktree_diff);
-    assert!(worktree_diff.contains("+head"), "{worktree_diff}");
-    assert!(worktree_diff.contains("+local"), "{worktree_diff}");
+    let workspace_diff = stdout(&workspace_diff);
+    assert!(workspace_diff.contains("+head"), "{workspace_diff}");
+    assert!(workspace_diff.contains("+local"), "{workspace_diff}");
 }
 
 #[test]

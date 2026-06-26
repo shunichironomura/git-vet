@@ -34,7 +34,7 @@ git vet status --workspace
 git vet diff src/lib.rs
 
 # Include uncommitted working-tree edits in the diff
-git vet diff --worktree src/lib.rs
+git vet diff --workspace src/lib.rs
 
 # Mark the file's current HEAD content as vetted
 git vet mark src/lib.rs
@@ -61,7 +61,7 @@ By default, `git-vet` looks at committed `HEAD` contents only. Untracked files a
 
 With `git vet status --workspace`, these states are computed from the current working-tree content for tracked files that still exist locally. A local edit to a vetted `HEAD` blob is therefore shown as `stale` until that edited content is committed and marked.
 
-For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. For `stale` files, it shows the cumulative diff since the last vetted version. Add `--worktree` to compare the latest vetted content with the local working-tree file instead of committed `HEAD`.
+For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. For `stale` files, it shows the cumulative diff since the last vetted version. Add `--workspace` to compare the latest vetted content with the local working-tree file instead of committed `HEAD`.
 
 ## Commands
 
@@ -69,7 +69,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet status --json` — emit stable JSON.
 - `git vet status --workspace` — classify local working-tree contents instead of committed `HEAD` contents.
 - `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
-- `git vet diff [--worktree] <path>` — show the diff that still needs vetting; `--worktree` includes local working-tree edits.
+- `git vet diff [--workspace] <path>` — show the diff that still needs vetting; `--workspace` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet prune` — prune stale Git-note entries.

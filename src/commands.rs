@@ -39,7 +39,7 @@ pub(crate) struct MarkOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DiffTarget {
     Head,
-    Worktree,
+    Workspace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,7 +188,7 @@ pub(crate) fn diff_path(
 
     match target {
         DiffTarget::Head => diff_classified_head(git, &path, &file, &classified.state),
-        DiffTarget::Worktree => diff_classified_worktree(git, &file, &classified.state),
+        DiffTarget::Workspace => diff_classified_workspace(git, &file, &classified.state),
     }
 }
 
@@ -205,7 +205,7 @@ fn diff_classified_head(
     }
 }
 
-fn diff_classified_worktree(
+fn diff_classified_workspace(
     git: &Git,
     file: &TrackedFile,
     state: &ReviewState,

@@ -59,9 +59,9 @@ enum CommandKind {
     },
     /// Show the diff that still needs review for a tracked file.
     Diff {
-        /// Compare the latest vetted content with the working tree instead of HEAD.
+        /// Compare the latest vetted content with the workspace instead of HEAD.
         #[arg(long)]
-        worktree: bool,
+        workspace: bool,
         path: PathBuf,
     },
     /// Fetch, merge, and push review notes for the selected channel.
@@ -120,9 +120,9 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
                 Gate::Closed => Ok(ExitCode::from(1)),
             }
         }
-        CommandKind::Diff { path, worktree } => {
-            let target = if worktree {
-                DiffTarget::Worktree
+        CommandKind::Diff { path, workspace } => {
+            let target = if workspace {
+                DiffTarget::Workspace
             } else {
                 DiffTarget::Head
             };
