@@ -5,8 +5,8 @@ use clap::{Parser, Subcommand};
 
 use crate::channel::{ChannelError, DEFAULT_REVIEW_CHANNEL, ReviewChannel};
 use crate::commands::{
-    DiffTarget, DirtyPathHandling, Gate, MarkOptions, StatusMode, diff_path, mark_paths, status,
-    sync_notes, unmark_paths,
+    DiffTarget, DirtyPathHandling, Gate, MarkOptions, StatusMode, StatusTarget, diff_path,
+    mark_paths, status, sync_notes, unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
@@ -53,6 +53,9 @@ enum CommandKind {
         /// Exit 1 when any in-scope tracked file is unreviewed.
         #[arg(long)]
         check: bool,
+        /// Classify local working-tree contents instead of committed HEAD contents.
+        #[arg(long)]
+        workspace: bool,
     },
     /// Show the diff that still needs review for a tracked file.
     Diff {
@@ -91,8 +94,28 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             unmark_paths(&git, &notes, &paths)?;
             Ok(ExitCode::SUCCESS)
         }
-        CommandKind::Status { json, all, check } => {
-            match status(&git, &notes, &channel, StatusMode { json, all, check })? {
+        CommandKind::Status {
+            json,
+            all,
+            check,
+            workspace,
+        } => {
+            let target = if workspace {
+                StatusTarget::Workspace
+            } else {
+                StatusTarget::Head
+            };
+            match status(
+                &git,
+                &notes,
+                &channel,
+                StatusMode {
+                    json,
+                    all,
+                    check,
+                    target,
+                },
+            )? {
                 Gate::Open => Ok(ExitCode::SUCCESS),
                 Gate::Closed => Ok(ExitCode::from(1)),
             }

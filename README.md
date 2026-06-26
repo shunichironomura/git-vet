@@ -6,7 +6,7 @@ Git-based vetting gate for tracked file contents.
 
 ![Screenshot of `git vet status` showing new, stale, and vetted files](images/git-vet-status.png)
 
-Run `git vet status` to get a review backlog for the repository. It shows files whose current committed contents are `new`, files that are `stale` because they changed since they were last vetted, and files that are already `vetted`.
+Run `git vet status` to get a review backlog for the repository. It shows files whose current committed contents are `new`, files that are `stale` because they changed since they were last vetted, and files that are already `vetted`. Add `--workspace` to classify the current local working-tree contents instead of committed `HEAD` contents.
 
 ## Install
 
@@ -27,6 +27,9 @@ git-vet status
 # See the vetting backlog for the default channel
 git vet status
 
+# Include uncommitted local edits in status classification
+git vet status --workspace
+
 # Inspect what needs vetting for a file at HEAD
 git vet diff src/lib.rs
 
@@ -46,7 +49,7 @@ git vet unmark src/lib.rs
 git vet status --check
 ```
 
-`git-vet` looks at committed `HEAD` contents only. Untracked files and uncommitted working-tree edits are not vetted or gated. `git vet mark` warns and asks before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
+By default, `git-vet` looks at committed `HEAD` contents only. Untracked files are not vetted or gated. Use `git vet status --workspace` to include uncommitted working-tree edits in local status/check output; for example, a local edit to a file whose `HEAD` blob is vetted appears as `stale`. `git vet mark` still records only committed `HEAD:<path>` bytes and warns before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
 
 ## States
 
@@ -56,12 +59,15 @@ git vet status --check
 - `stale`: an earlier version was vetted, but the current `HEAD` content has changed.
 - `vetted`: the current `HEAD` content is vetted.
 
+With `git vet status --workspace`, these states are computed from the current working-tree content for tracked files that still exist locally. A local edit to a vetted `HEAD` blob is therefore shown as `stale` until that edited content is committed and marked.
+
 For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. For `stale` files, it shows the cumulative diff since the last vetted version. Add `--worktree` to compare the latest vetted content with the local working-tree file instead of committed `HEAD`.
 
 ## Commands
 
 - `git vet status` — show vetting state for tracked files.
 - `git vet status --json` — emit stable JSON.
+- `git vet status --workspace` — classify local working-tree contents instead of committed `HEAD` contents.
 - `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
 - `git vet diff [--worktree] <path>` — show the diff that still needs vetting; `--worktree` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.

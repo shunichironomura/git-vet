@@ -37,8 +37,9 @@ Goal: a usable local tool for the main workflow: status backlog → diff → mar
   - Append a provenance record to `refs/notes/vet/<channel>` for that blob. Omit `--channel` to use `vet.channel`, falling back to `default` when unset.
   - Make marking idempotent by reading existing records, appending the new record, sorting/deduplicating, then force-writing the note.
   - Do not mutate Git config when marking; sort/deduplicate the note body before force-writing it.
-- `git-vet [--channel <channel>] status [--json] [--check]`
+- `git-vet [--channel <channel>] status [--workspace] [--json] [--check]`
   - List all tracked, in-scope files, skipping submodules/gitlinks.
+  - By default classify committed `HEAD` blobs; with `--workspace`, classify current local working-tree blobs for tracked files that still exist locally.
   - Load reviewed blob OIDs once from `refs/notes/vet/<channel>`.
   - Apply `.vetignore` plus `.vetignore.<channel>` using gitignore syntax.
   - Default mode: stably grouped human-readable output for `vetted`, `stale`, and `new`.
