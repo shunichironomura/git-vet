@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gix::bstr::ByteSlice;
 
 use crate::error::{AppError, git_error};
-use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile};
+use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile, WorkspaceFile};
 use crate::path::{
     PathError, RepoPath, normalize_absolute_lexically, prefix_from_cwd, repo_path_from_bstr,
     repo_path_from_relative,
@@ -76,6 +76,71 @@ impl Git {
             .collect::<Result<Vec<_>, AppError>>()?;
         files.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(files)
+    }
+
+    pub(crate) fn tracked_files_in_workspace(
+        &self,
+        head_files: &[TrackedFile],
+    ) -> Result<Vec<WorkspaceFile>, AppError> {
+        head_files
+            .iter()
+            .map(|head| {
+                self.worktree_blob(&head.path).map(|blob| {
+                    blob.map(|blob| WorkspaceFile {
+                        head: head.clone(),
+                        workspace: TrackedFile {
+                            path: head.path.clone(),
+                            blob,
+                            mode: head.mode,
+                        },
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|files| files.into_iter().flatten().collect())
+    }
+
+    fn worktree_blob(&self, path: &RepoPath) -> Result<Option<BlobOid>, AppError> {
+        let worktree_path = self.root.join(path.to_os_path_buf());
+        let metadata = match fs::symlink_metadata(&worktree_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let file_type = metadata.file_type();
+
+        if file_type.is_symlink() {
+            self.hash_symlink_target(&worktree_path).map(Some)
+        } else if file_type.is_file() {
+            self.hash_regular_worktree_file(path).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn hash_regular_worktree_file(&self, path: &RepoPath) -> Result<BlobOid, AppError> {
+        let output = self.git_output("hashing working-tree file", |command| {
+            command
+                .arg("hash-object")
+                .arg(format!("--path={path}"))
+                .arg("--")
+                .arg(path.to_os_path_buf());
+        })?;
+        let oid = std::str::from_utf8(&output)
+            .map_err(|err| git_error("decoding git hash-object output", err))?
+            .trim();
+        parse_object_id("parsing git hash-object output", oid.as_bytes()).map(BlobOid::new)
+    }
+
+    fn hash_symlink_target(&self, path: &Path) -> Result<BlobOid, AppError> {
+        let target = fs::read_link(path)?;
+        gix::objs::compute_hash(
+            self.repo.object_hash(),
+            gix::objs::Kind::Blob,
+            target.as_os_str().as_encoded_bytes(),
+        )
+        .map(BlobOid::new)
+        .map_err(|err| git_error("hashing symbolic-link target", err))
     }
 
     pub(crate) fn blob_at_head(&self, path: &RepoPath) -> Result<TrackedFile, AppError> {

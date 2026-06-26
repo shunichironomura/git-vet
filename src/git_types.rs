@@ -71,3 +71,9 @@ pub(crate) struct TrackedFile {
     pub(crate) blob: BlobOid,
     pub(crate) mode: FileMode,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkspaceFile {
+    pub(crate) head: TrackedFile,
+    pub(crate) workspace: TrackedFile,
+}

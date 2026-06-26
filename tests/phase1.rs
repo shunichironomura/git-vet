@@ -439,6 +439,31 @@ fn mark_allow_dirty_marks_head_blob_and_warns_without_prompting() {
 }
 
 #[test]
+fn status_workspace_treats_local_edit_to_vetted_head_as_stale() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    repo.write("a.txt", "reviewed\nlocal\n");
+
+    let head_records = status_json(&repo);
+    let head_record = record_for(&head_records, "a.txt");
+    assert_eq!(head_record["state"], "vetted");
+    let head_blob = head_record["blob"].clone();
+
+    let workspace_records = status_json_with_args(&repo, &["status", "--workspace", "--json"]);
+    let workspace_record = record_for(&workspace_records, "a.txt");
+    assert_eq!(workspace_record["state"], "stale");
+    assert_eq!(workspace_record["baseline"], head_blob);
+    assert_ne!(workspace_record["blob"], head_blob);
+
+    let check = repo.run_vet(&["status", "--workspace", "--check"]);
+    assert_eq!(check.status.code(), Some(1));
+    assert!(stdout(&check).contains("stale  a.txt"));
+}
+
+#[test]
 fn unmark_makes_a_vetted_file_new() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");

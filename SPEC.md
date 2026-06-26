@@ -140,7 +140,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | Command | Behavior |
 |---|---|
 | `git vet mark [--allow-dirty] <paths…>` | Sign off the current blob of each path in the selected channel: append a review record note in `refs/notes/vet/<channel>` keyed on `HEAD:<path>`. Idempotent. |
-| `git vet status [--json] [--check]` | Classify every in-scope tracked file (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. |
+| `git vet status [--workspace] [--json] [--check]` | Classify every in-scope tracked file (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. By default this uses committed `HEAD` content; `--workspace` uses current local working-tree content for tracked files that still exist locally. |
 | `git vet diff [--worktree] <path>` | Show the change that still needs review for `<path>` in the selected channel: the cumulative diff from its last-reviewed version to `HEAD`, or to the local working-tree file with `--worktree` (§7.2). |
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
@@ -153,6 +153,7 @@ For `mark` and `review`, targeted paths whose working-tree contents differ from 
 ### 6.1 `status` output modes
 
 - Default: human-readable grouping by derived state, including the active channel.
+- `--workspace`: classify current local working-tree contents instead of committed `HEAD` contents. A working-tree edit to a vetted `HEAD` blob is `stale` with the vetted `HEAD` blob as its baseline. Tracked files deleted from the working tree have no current content and are excluded in this mode.
 - `--json`: object `{ "channel": str, "files": [ { "path": str, "state": "vetted"|"stale"|"new", "blob": oid, "baseline": oid|null, "last_vetted_at": str|null, "vetted_by": { "name": str, "email": str }|null } ] }`.
 - `--check`: release-gate mode for the selected channel. Print the unreviewed files; **exit non-zero** if any in-scope file is `stale` or `new` in that channel.
 
@@ -175,6 +176,8 @@ for b in historical_blobs(path):       # git log --follow -- <path>, newest→ol
     if b ∈ reviewed_set(channel): return Stale(baseline = b)
 return New
 ```
+
+For `status --workspace`, `cur` is the blob that Git would produce from the working-tree file. The baseline search first considers the committed `HEAD:<path>` blob as a synthetic predecessor when it differs from `cur`, then continues through committed history as above.
 
 - `reviewed_set(channel)` is loaded **once** per invocation: list every note in `refs/notes/vet/<channel>`, collect the annotated blob OIDs into a `HashSet<Oid>`. Membership tests are O(1).
 - The history walk runs only when `cur` is not vetted, and is bounded to the single path via `--follow` (which also tracks the baseline across renames).

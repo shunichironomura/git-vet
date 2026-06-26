@@ -8,7 +8,7 @@ use chrono::{SecondsFormat, Utc};
 use crate::channel::ReviewChannel;
 use crate::error::AppError;
 use crate::git::{Git, HistoryChange, HistoryChangeStatus};
-use crate::git_types::{BlobOid, TrackedFile};
+use crate::git_types::{BlobOid, TrackedFile, WorkspaceFile};
 use crate::notes::{GitNotesStore, NoteRemoval, NotesStore};
 use crate::path::RepoPath;
 use crate::remote::RemoteName;
@@ -22,6 +22,13 @@ pub(crate) struct StatusMode {
     pub(crate) json: bool,
     pub(crate) all: bool,
     pub(crate) check: bool,
+    pub(crate) target: StatusTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StatusTarget {
+    Head,
+    Workspace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,7 +139,7 @@ pub(crate) fn status(
         .collect::<Vec<_>>();
     let reviewed = notes.list_reviewed()?;
 
-    let mut classified = classify_tracked_files(&tracked, &reviewed, || git.history_changes())?;
+    let mut classified = classify_status_files(git, &tracked, &reviewed, mode.target)?;
     classified.sort_by(|left, right| left.path.cmp(&right.path));
 
     if mode.check {
@@ -404,6 +411,45 @@ fn classify_path(
 ) -> Result<ClassifiedFile, AppError> {
     let mut historical_blobs = |file: &TrackedFile| git.historical_blobs(&file.path, &file.blob);
     classify_file(file, reviewed, &mut historical_blobs)
+}
+
+fn classify_status_files(
+    git: &Git,
+    head_files: &[TrackedFile],
+    reviewed: &ReviewedSet,
+    target: StatusTarget,
+) -> Result<Vec<ClassifiedFile>, AppError> {
+    match target {
+        StatusTarget::Head => {
+            classify_tracked_files(head_files, reviewed, || git.history_changes())
+        }
+        StatusTarget::Workspace => {
+            let workspace_files = git.tracked_files_in_workspace(head_files)?;
+            let workspace_changes = workspace_head_changes(&workspace_files);
+            let files = workspace_files
+                .iter()
+                .map(|file| file.workspace.clone())
+                .collect::<Vec<_>>();
+            classify_tracked_files(&files, reviewed, || {
+                let mut changes = workspace_changes;
+                changes.extend(git.history_changes()?);
+                Ok(changes)
+            })
+        }
+    }
+}
+
+fn workspace_head_changes(files: &[WorkspaceFile]) -> Vec<HistoryChange> {
+    files
+        .iter()
+        .filter(|file| file.workspace.blob != file.head.blob)
+        .map(|file| HistoryChange {
+            status: HistoryChangeStatus::Modified,
+            before_path: file.head.path.clone(),
+            after_path: Some(file.workspace.path.clone()),
+            before_blob: Some(file.head.blob),
+        })
+        .collect()
 }
 
 fn classify_tracked_files(
