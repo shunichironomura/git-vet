@@ -385,6 +385,90 @@ fn status_check_reports_review_state_with_gate_summary() {
 }
 
 #[test]
+fn status_accepts_file_and_directory_pathspecs() {
+    let repo = TestRepo::new();
+    repo.write("src/a.rs", "reviewed\n");
+    repo.write("src/b.rs", "not reviewed\n");
+    repo.write("docs/readme.md", "not reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "src/a.rs"]).status.success());
+
+    let src_records = status_json_with_args(&repo, &["status", "--json", "src"]);
+    assert_eq!(src_records.len(), 2);
+    assert_eq!(record_for(&src_records, "src/a.rs")["state"], "vetted");
+    assert_eq!(record_for(&src_records, "src/b.rs")["state"], "new");
+    assert!(
+        !src_records
+            .iter()
+            .any(|record| record["path"] == "docs/readme.md")
+    );
+
+    let file_records = status_json_with_args(&repo, &["status", "--json", "src/a.rs"]);
+    assert_eq!(file_records.len(), 1);
+    assert_eq!(file_records[0]["path"], "src/a.rs");
+    assert_eq!(file_records[0]["state"], "vetted");
+}
+
+#[test]
+fn status_pathspec_check_gates_only_the_selected_scope() {
+    let repo = TestRepo::new();
+    repo.write("src/a.rs", "reviewed\n");
+    repo.write("src/b.rs", "not reviewed\n");
+    repo.write("docs/readme.md", "not reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "src/a.rs"]).status.success());
+
+    let reviewed_file = repo.run_vet(&["status", "--check", "src/a.rs"]);
+    assert!(
+        reviewed_file.status.success(),
+        "scoped check failed: {}",
+        stderr(&reviewed_file)
+    );
+    assert!(stdout(&reviewed_file).contains("Review gate passed"));
+
+    let src_dir = repo.run_vet(&["status", "--check", "src"]);
+    assert_eq!(src_dir.status.code(), Some(1));
+    let output = stdout(&src_dir);
+    assert!(output.contains("new    src/b.rs"), "{output}");
+    assert!(!output.contains("docs/readme.md"), "{output}");
+}
+
+#[test]
+fn status_pathspec_human_output_shows_vetted_file_result() {
+    let repo = TestRepo::new();
+    repo.write("src/a.rs", "reviewed\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "src/a.rs"]).status.success());
+
+    let status = repo.run_vet(&["status", "src/a.rs"]);
+    assert!(
+        status.status.success(),
+        "status failed: {}",
+        stderr(&status)
+    );
+    let output = stdout(&status);
+    assert!(output.contains("All files are vetted."), "{output}");
+    assert!(output.contains("Vetted:"), "{output}");
+    assert!(output.contains("✓ src/a.rs"), "{output}");
+}
+
+#[test]
+fn status_unmatched_pathspec_exits_two() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "tracked\n");
+    repo.commit_all("initial");
+
+    let status = repo.run_vet(&["status", "missing"]);
+    assert_eq!(status.status.code(), Some(2));
+    assert_eq!(stdout(&status), "");
+    assert!(
+        stderr(&status).contains("pathspec did not match any tracked files at HEAD: missing"),
+        "{}",
+        stderr(&status)
+    );
+}
+
+#[test]
 fn mark_dirty_path_fails_noninteractive_without_allow_dirty() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");

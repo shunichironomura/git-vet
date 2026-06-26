@@ -140,6 +140,10 @@ pub(crate) fn human_status(
             "  {} All files are vetted.",
             paint("✓", Color::Green, options.color)
         );
+        if options.show_all {
+            output.push('\n');
+            push_vetted_group(&mut output, classified, options.color);
+        }
         return output;
     }
 

@@ -11,8 +11,8 @@ use gix::bstr::ByteSlice;
 use crate::error::{AppError, git_error};
 use crate::git_types::{BlobOid, CommitOid, FileMode, TrackedFile, WorkspaceFile};
 use crate::path::{
-    PathError, RepoPath, normalize_absolute_lexically, prefix_from_cwd, repo_path_from_bstr,
-    repo_path_from_relative,
+    PathError, RepoPath, RepoPathScope, normalize_absolute_lexically, prefix_from_cwd,
+    repo_path_from_bstr, repo_path_from_relative, repo_path_scope_from_relative,
 };
 use crate::remote::{RemoteError, RemoteName, RemoteNameSource};
 use crate::review::Vetter;
@@ -41,6 +41,18 @@ impl Git {
     }
 
     pub(crate) fn normalize_user_path(&self, input: &Path) -> Result<RepoPath, AppError> {
+        repo_path_from_relative(&self.normalize_user_path_relative(input)?).map_err(AppError::from)
+    }
+
+    pub(crate) fn normalize_user_path_scope(
+        &self,
+        input: &Path,
+    ) -> Result<RepoPathScope, AppError> {
+        repo_path_scope_from_relative(&self.normalize_user_path_relative(input)?)
+            .map_err(AppError::from)
+    }
+
+    fn normalize_user_path_relative(&self, input: &Path) -> Result<PathBuf, AppError> {
         let joined = if input.is_absolute() {
             input.to_path_buf()
         } else {
@@ -48,10 +60,10 @@ impl Git {
         };
         let normalized = normalize_absolute_lexically(&joined)?;
         let root = normalize_absolute_lexically(&self.root)?;
-        let relative = normalized
+        normalized
             .strip_prefix(&root)
-            .map_err(|_| AppError::from(PathError::OutsideRepo))?;
-        repo_path_from_relative(relative).map_err(AppError::from)
+            .map(Path::to_path_buf)
+            .map_err(|_| AppError::from(PathError::OutsideRepo))
     }
 
     pub(crate) fn tracked_files_at_head(&self) -> Result<Vec<TrackedFile>, AppError> {

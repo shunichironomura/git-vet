@@ -2,7 +2,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::path::{PathError, RepoPath};
+use crate::path::{PathError, RepoPath, RepoPathScope};
 use crate::remote::RemoteError;
 
 #[derive(Debug, Error)]
@@ -26,6 +26,8 @@ pub enum AppError {
     InvalidRepoPath { details: &'static str },
     #[error("path is not tracked at HEAD: {0}")]
     PathNotTracked(RepoPath),
+    #[error("pathspec did not match any tracked files at HEAD: {0}")]
+    PathspecNotMatched(RepoPathScope),
     #[error("path is a submodule/gitlink and is out of scope: {0}")]
     PathIsSubmodule(RepoPath),
     #[error("failed to read vetignore file: {0}")]
