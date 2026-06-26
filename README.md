@@ -30,6 +30,10 @@ git vet status
 # Include uncommitted local edits in status classification
 git vet status --workspace
 
+# Show status for one file or a directory subtree
+git vet status src/lib.rs
+git vet status src/
+
 # Inspect what needs vetting for a file at HEAD
 git vet diff src/lib.rs
 
@@ -47,9 +51,12 @@ git vet unmark src/lib.rs
 
 # Gate a release/CI job: exits 1 if any in-scope file is not vetted
 git vet status --check
+
+# Gate only a selected file or directory subtree
+git vet status --check src/
 ```
 
-By default, `git-vet` looks at committed `HEAD` contents only. Untracked files are not vetted or gated. Use `git vet status --workspace` to include uncommitted working-tree edits in local status/check output; for example, a local edit to a file whose `HEAD` blob is vetted appears as `stale`. `git vet mark` still records only committed `HEAD:<path>` bytes and warns before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
+By default, `git-vet` looks at committed `HEAD` contents only. Untracked files are not vetted or gated. `git vet status [PATHSPEC...]` limits status to tracked files matching the given file or directory pathspecs, and `--check`, `--json`, and `--workspace` compose with that same scope. Use `git vet status --workspace` to include uncommitted working-tree edits in local status/check output; for example, a local edit to a file whose `HEAD` blob is vetted appears as `stale`. `git vet mark` still records only committed `HEAD:<path>` bytes and warns before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
 
 ## States
 
@@ -65,10 +72,10 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 
 ## Commands
 
-- `git vet status` — show vetting state for tracked files.
-- `git vet status --json` — emit stable JSON.
-- `git vet status --workspace` — classify local working-tree contents instead of committed `HEAD` contents.
-- `git vet status --check` — print files that are not vetted and exit non-zero if any exist.
+- `git vet status [PATHSPEC...]` — show vetting state for tracked files, optionally limited to files or directory subtrees.
+- `git vet status --json [PATHSPEC...]` — emit stable JSON.
+- `git vet status --workspace [PATHSPEC...]` — classify local working-tree contents instead of committed `HEAD` contents.
+- `git vet status --check [PATHSPEC...]` — print files that are not vetted and exit non-zero if any exist.
 - `git vet diff [--workspace] <path>` — show the diff that still needs vetting; `--workspace` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.

@@ -130,10 +130,11 @@ pub(crate) fn status(
     notes: &impl NotesStore,
     channel: &ReviewChannel,
     mode: StatusMode,
+    pathspecs: &[PathBuf],
 ) -> Result<Gate, AppError> {
     let vetignore = Vetignore::load(&git.root, channel)?;
-    let tracked = git
-        .tracked_files_at_head()?
+    let tracked = git.tracked_files_at_head()?;
+    let tracked = status_scope_files(git, &tracked, pathspecs)?
         .into_iter()
         .filter(|file| !vetignore.is_ignored(&file.path))
         .collect::<Vec<_>>();
@@ -402,6 +403,34 @@ impl DirtyPathAnswer {
             _ => Self::Invalid,
         }
     }
+}
+
+fn status_scope_files(
+    git: &Git,
+    files: &[TrackedFile],
+    pathspecs: &[PathBuf],
+) -> Result<Vec<TrackedFile>, AppError> {
+    if pathspecs.is_empty() {
+        return Ok(files.to_vec());
+    }
+
+    let scopes = pathspecs
+        .iter()
+        .map(|pathspec| git.normalize_user_path_scope(pathspec))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some(unmatched) = scopes
+        .iter()
+        .find(|scope| !files.iter().any(|file| scope.contains_file(&file.path)))
+    {
+        return Err(AppError::PathspecNotMatched((*unmatched).clone()));
+    }
+
+    Ok(files
+        .iter()
+        .filter(|file| scopes.iter().any(|scope| scope.contains_file(&file.path)))
+        .cloned()
+        .collect())
 }
 
 fn classify_path(

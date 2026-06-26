@@ -56,6 +56,9 @@ enum CommandKind {
         /// Classify local working-tree contents instead of committed HEAD contents.
         #[arg(long)]
         workspace: bool,
+        /// Limit status to tracked files matching these file or directory pathspecs.
+        #[arg(value_name = "PATHSPEC")]
+        paths: Vec<PathBuf>,
     },
     /// Show the diff that still needs review for a tracked file.
     Diff {
@@ -99,6 +102,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
             all,
             check,
             workspace,
+            paths,
         } => {
             let target = if workspace {
                 StatusTarget::Workspace
@@ -111,10 +115,11 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
                 &channel,
                 StatusMode {
                     json,
-                    all,
+                    all: all || !paths.is_empty(),
                     check,
                     target,
                 },
+                &paths,
             )? {
                 Gate::Open => Ok(ExitCode::SUCCESS),
                 Gate::Closed => Ok(ExitCode::from(1)),

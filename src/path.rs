@@ -15,6 +15,16 @@ pub struct RepoPath {
     components: Vec<RepoPathComponent>,
 }
 
+/// A repository-relative status scope supplied by the user.
+///
+/// Unlike `RepoPath`, this may be empty, representing the repository root.
+/// It matches tracked files whose paths are exactly equal to the scope or live
+/// below it.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RepoPathScope {
+    components: Vec<RepoPathComponent>,
+}
+
 impl RepoPath {
     /// Parses a Git path into a repository-relative path.
     ///
@@ -55,6 +65,36 @@ impl Serialize for RepoPath {
         S: Serializer,
     {
         serializer.serialize_str(&self.to_git_path())
+    }
+}
+
+impl RepoPathScope {
+    /// Returns true when this scope contains the provided repository file path.
+    pub(crate) fn contains_file(&self, path: &RepoPath) -> bool {
+        self.components.len() <= path.components.len()
+            && self
+                .components
+                .iter()
+                .zip(path.components.iter())
+                .all(|(scope, path)| scope == path)
+    }
+
+    fn to_git_path(&self) -> String {
+        if self.components.is_empty() {
+            ".".to_owned()
+        } else {
+            self.components
+                .iter()
+                .map(RepoPathComponent::as_str)
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+    }
+}
+
+impl fmt::Display for RepoPathScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_git_path())
     }
 }
 
@@ -192,12 +232,26 @@ pub(crate) fn normalize_absolute_lexically(path: &Path) -> Result<PathBuf, PathE
 /// tracked-file path. Parent-directory, root, prefix, non-UTF-8, and NUL-byte
 /// components are rejected.
 pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError> {
+    let components = repo_path_components_from_relative(path)?;
+
+    if components.is_empty() {
+        Err(PathError::EmptyPath)
+    } else {
+        Ok(RepoPath { components })
+    }
+}
+
+/// Converts an OS-native relative path into a repository-relative status scope.
+pub(crate) fn repo_path_scope_from_relative(path: &Path) -> Result<RepoPathScope, PathError> {
+    repo_path_components_from_relative(path).map(|components| RepoPathScope { components })
+}
+
+fn repo_path_components_from_relative(path: &Path) -> Result<Vec<RepoPathComponent>, PathError> {
     if !path.is_relative() {
         return Err(PathError::OutsideRepo);
     }
 
-    let components = path
-        .components()
+    path.components()
         .filter_map(|component| match component {
             Component::Normal(part) => Some(
                 RepoPathComponent::from_os_component(part)
@@ -208,13 +262,7 @@ pub(crate) fn repo_path_from_relative(path: &Path) -> Result<RepoPath, PathError
                 Some(Err(PathError::OutsideRepo))
             }
         })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    if components.is_empty() {
-        Err(PathError::EmptyPath)
-    } else {
-        Ok(RepoPath { components })
-    }
+        .collect()
 }
 
 /// Splits and validates a Git path into repository path components.

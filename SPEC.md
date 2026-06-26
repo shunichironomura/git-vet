@@ -140,7 +140,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | Command | Behavior |
 |---|---|
 | `git vet mark [--allow-dirty] <paths…>` | Sign off the current blob of each path in the selected channel: append a review record note in `refs/notes/vet/<channel>` keyed on `HEAD:<path>`. Idempotent. |
-| `git vet status [--workspace] [--json] [--check]` | Classify every in-scope tracked file (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. By default this uses committed `HEAD` content; `--workspace` uses current local working-tree content for tracked files that still exist locally. |
+| `git vet status [--workspace] [--json] [--check] [paths…]` | Classify every in-scope tracked file matching the optional file/directory pathspecs (§7.1) as `vetted` / `stale` / `new` in the selected channel and report. With no paths, classify every in-scope tracked file. By default this uses committed `HEAD` content; `--workspace` uses current local working-tree content for tracked files that still exist locally. |
 | `git vet diff [--workspace] <path>` | Show the change that still needs review for `<path>` in the selected channel: the cumulative diff from its last-reviewed version to `HEAD`, or to the local working-tree file with `--workspace` (§7.2). |
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
@@ -155,7 +155,8 @@ For `mark` and `review`, targeted paths whose working-tree contents differ from 
 - Default: human-readable grouping by derived state, including the active channel.
 - `--workspace`: classify current local working-tree contents instead of committed `HEAD` contents. A working-tree edit to a vetted `HEAD` blob is `stale` with the vetted `HEAD` blob as its baseline. Tracked files deleted from the working tree have no current content and are excluded in this mode.
 - `--json`: object `{ "channel": str, "files": [ { "path": str, "state": "vetted"|"stale"|"new", "blob": oid, "baseline": oid|null, "last_vetted_at": str|null, "vetted_by": { "name": str, "email": str }|null } ] }`.
-- `--check`: release-gate mode for the selected channel. Print the unreviewed files; **exit non-zero** if any in-scope file is `stale` or `new` in that channel.
+- Optional path arguments limit output/checking to tracked files matching those file or directory pathspecs. Multiple pathspecs are unioned. Unmatched explicit pathspecs are usage errors. `.vetignore` and `.vetignore.<channel>` are still applied after path filtering.
+- `--check`: release-gate mode for the selected channel. Print the unreviewed files; **exit non-zero** if any selected in-scope file is `stale` or `new` in that channel.
 
 ### 6.2 Exit codes
 
@@ -228,7 +229,7 @@ The gate never walks history: an unreviewed file fails regardless of whether it 
 4. `git vet mark <path>` signs off the current content in the selected channel.
 5. Any subsequent edit by anyone produces a new blob, dropping the file back into the backlog automatically.
 6. `git vet sync` shares the selected channel's state across machines/teammates.
-7. At release, `git vet status --check [--channel <name>]` gates on the whole tree being reviewed in that channel.
+7. At release, `git vet status --check [--channel <name>]` gates on the whole tree being reviewed in that channel. Add path arguments to gate only selected files or directory subtrees.
 
 ### 8.2 Onboarding a non-new (legacy) repository
 
