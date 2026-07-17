@@ -135,7 +135,7 @@ Notes for blobs that no longer exist anywhere in the repo accumulate slowly. `gi
 
 ## 6. Command surface
 
-Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical behavior in all three. All commands accept global `--channel <channel>`; if omitted, `vet.channel` from Git config is used; if that config key is unset, `default` is used.
+Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical behavior in all three. Commands that operate on one selected channel accept global `--channel <channel>`; if omitted, `vet.channel` from Git config is used; if that config key is unset, `default` is used. Channel transfer commands name both endpoints explicitly and reject `--channel` (§6.3).
 
 | Command | Behavior |
 |---|---|
@@ -145,6 +145,8 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
 | `git vet unmark <paths…>` | Remove the note on the current blob of each path in the selected channel, forcing re-review. (Affects all paths sharing that blob in that channel — see §9.) |
+| `git vet channel copy <source> <destination>` | Copy the source channel's complete local review-notes ref into a new destination channel. |
+| `git vet channel move <source> <destination>` | Atomically move the source channel's complete local review-notes ref to a new destination channel. |
 | `git vet sync [--remote <name>]` | Fetch, merge, and push `refs/notes/vet/<channel>` using the selected remote. |
 | `git vet prune` | Remove notes for blobs no longer present in the selected channel (`git notes --ref=vet/<channel> prune`). |
 
@@ -163,6 +165,23 @@ For `mark` and `review`, targeted paths whose working-tree contents differ from 
 - `0` — success; for `--check`, all in-scope files are `vetted`.
 - `1` — for `--check`, one or more in-scope files are not reviewed.
 - `2` — usage / runtime error (not a Git repo, bad path, etc.).
+
+### 6.3 Channel transfers
+
+`channel copy` and `channel move` operate on local notes refs only:
+
+```text
+refs/notes/vet/<source>
+refs/notes/vet/<destination>
+```
+
+Both endpoint names are required and validated as normal flat review-channel names. The endpoints must differ, the source ref must exist, and the destination ref must not exist. Missing sources and existing destinations are errors. The commands never implicitly merge or replace destination review state.
+
+`channel copy` creates the destination at exactly the source ref's current object ID and retains the source. Subsequent writes to either channel are independent. `channel move` creates the destination at that same object ID and deletes the source in one guarded ref transaction. The transaction verifies the source's observed object ID and the destination's absence so concurrent changes fail rather than being discarded.
+
+The complete notes ref is transferred without enumerating or rewriting note bodies. This includes notes on historical blobs not present at `HEAD`; provenance records remain byte-for-byte unchanged.
+
+Transfers do not consult or modify `vet.channel`, `.vetignore`, `.vetignore.<channel>`, the working tree, or remote refs, and they perform no network access. `--channel` is rejected because both endpoints are explicit. Publish the destination with a separate `git vet --channel <destination> sync`. Moving a local source does not delete a source ref that already exists on a remote.
 
 ---
 
@@ -275,7 +294,7 @@ All patterns are interpreted relative to the repository root, including patterns
 - `cargo install git-vet` is the install path; `git vet` lights up with no further wiring.
 - Ship `git-vet.1` so `git help vet` works; `git help -a` and completion discover `git-*` binaries on `PATH`.
 - **Path resolution:** when run as `git vet`, Git sets `GIT_PREFIX` to the subdirectory the user invoked from. Resolve user-supplied relative paths against the repository prefix (gix repository discovery, or `git rev-parse --show-prefix`) so `git vet mark foo.rs` from a subdirectory means the same file as the direct invocation. Normalize once, up front.
-- **Channel option:** `--channel <channel>` is global and may appear before or after the subcommand. Channel selection priority is explicit `--channel <channel>`, then Git config `vet.channel`, then built-in `default`. Channel names from either CLI or config must be flat names with no `/`, and must form a valid Git ref when appended to `refs/notes/vet/`. The no-`/` rule avoids Git ref namespace prefix collisions such as `refs/notes/vet/team` versus `refs/notes/vet/team/security`. If configured `vet.channel` is present but empty or invalid, exit with a usage/runtime error unless a valid explicit `--channel` overrides it.
+- **Channel option:** `--channel <channel>` is global and may appear before or after subcommands that operate on one selected channel. Channel selection priority is explicit `--channel <channel>`, then Git config `vet.channel`, then built-in `default`. Channel names from either CLI or config must be flat names with no `/`, and must form a valid Git ref when appended to `refs/notes/vet/`. The no-`/` rule avoids Git ref namespace prefix collisions such as `refs/notes/vet/team` versus `refs/notes/vet/team/security`. If configured `vet.channel` is present but empty or invalid, exit with a usage/runtime error unless a valid explicit `--channel` overrides it. `channel copy` and `channel move` do not perform this selection: they validate their explicit source and destination independently and reject `--channel`.
 - **Shadowing caveat:** Git prioritizes its own builtins over `PATH`. If Git ever shipped a builtin `vet`, `git vet` would resolve to it; direct `git-vet`/`vet` invocation is immune. No such builtin exists today.
 
 ---

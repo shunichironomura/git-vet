@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
-use crate::channel::NotesRef;
+use crate::channel::{ChannelTransfer, ChannelTransferKind, NotesRef};
 use crate::error::{AppError, git_error};
 use crate::git::Git;
 use crate::git_types::BlobOid;
@@ -32,6 +32,66 @@ struct NoteListEntry {
 pub(crate) struct GitNotesStore<'git> {
     git: &'git Git,
     notes_ref: NotesRef,
+}
+
+pub(crate) struct GitNotesChannelStore<'git> {
+    git: &'git Git,
+}
+
+impl<'git> GitNotesChannelStore<'git> {
+    pub(crate) const fn new(git: &'git Git) -> Self {
+        Self { git }
+    }
+
+    pub(crate) fn transfer(&self, transfer: &ChannelTransfer) -> Result<(), AppError> {
+        let source_ref = transfer.source().notes_ref();
+        let destination_ref = transfer.destination().notes_ref();
+        let source_target = self
+            .git
+            .repo
+            .try_find_reference(source_ref.as_str())
+            .map_err(|error| git_error("reading source channel notes ref", error))?
+            .ok_or_else(|| AppError::MissingSourceChannelNotes {
+                channel: transfer.source().to_string(),
+            })?
+            .target()
+            .try_id()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| AppError::SymbolicChannelNotesRef {
+                channel: transfer.source().to_string(),
+            })?;
+
+        if self
+            .git
+            .repo
+            .try_find_reference(destination_ref.as_str())
+            .map_err(|error| git_error("reading destination channel notes ref", error))?
+            .is_some()
+        {
+            return Err(AppError::ExistingDestinationChannelNotes {
+                channel: transfer.destination().to_string(),
+            });
+        }
+
+        let source_oid = source_target.to_string();
+        let instructions = update_ref_transaction(transfer, &source_oid);
+        // The documented update-ref transaction protocol has a verify-only operation,
+        // which lets copy guard the source without rewriting it. Disable automatic reflog
+        // creation so transferring an existing notes commit does not require reviewer identity.
+        run_git_with_stdin(
+            self.git,
+            "transferring channel review notes",
+            [
+                "-c",
+                "core.logAllRefUpdates=false",
+                "update-ref",
+                "--stdin",
+                "-z",
+            ],
+            &instructions,
+        )?;
+        Ok(())
+    }
 }
 
 impl<'git> GitNotesStore<'git> {
@@ -161,13 +221,7 @@ impl<'git> GitNotesStore<'git> {
     }
 
     fn git_command(&self) -> Command {
-        let mut command = Command::new("git");
-        command
-            .current_dir(&self.git.root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_PREFIX");
-        command
+        git_command(self.git)
     }
 
     fn git_output<I, S>(&self, operation: &'static str, args: I) -> Result<Vec<u8>, AppError>
@@ -189,21 +243,7 @@ impl<'git> GitNotesStore<'git> {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut child = self
-            .git_command()
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let mut child_stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| git_error(operation, "git stdin was not available"))?;
-        child_stdin.write_all(stdin.as_bytes())?;
-        drop(child_stdin);
-        let output = child.wait_with_output()?;
-        stdout_from_success(operation, output)
+        run_git_with_stdin(self.git, operation, args, stdin.as_bytes())
     }
 }
 
@@ -276,6 +316,104 @@ impl NotesStore for GitNotesStore<'_> {
         self.git_output("pruning git notes", ["notes", ref_arg.as_str(), "prune"])?;
         Ok(())
     }
+}
+
+fn update_ref_transaction(transfer: &ChannelTransfer, source_oid: &str) -> Vec<u8> {
+    let mut instructions = Vec::new();
+    append_transaction_command(&mut instructions, "start");
+
+    match transfer.kind() {
+        ChannelTransferKind::Copy => {
+            append_transaction_command(&mut instructions, "option no-deref");
+            append_ref_instruction(
+                &mut instructions,
+                "verify",
+                transfer.source().notes_ref(),
+                source_oid,
+            );
+        }
+        ChannelTransferKind::Move => {}
+    }
+
+    append_transaction_command(&mut instructions, "option no-deref");
+    append_ref_instruction(
+        &mut instructions,
+        "create",
+        transfer.destination().notes_ref(),
+        source_oid,
+    );
+
+    match transfer.kind() {
+        ChannelTransferKind::Copy => {}
+        ChannelTransferKind::Move => {
+            append_transaction_command(&mut instructions, "option no-deref");
+            append_ref_instruction(
+                &mut instructions,
+                "delete",
+                transfer.source().notes_ref(),
+                source_oid,
+            );
+        }
+    }
+
+    append_transaction_command(&mut instructions, "prepare");
+    append_transaction_command(&mut instructions, "commit");
+    instructions
+}
+
+fn append_transaction_command(instructions: &mut Vec<u8>, command: &str) {
+    instructions.extend_from_slice(command.as_bytes());
+    instructions.push(0);
+}
+
+fn append_ref_instruction(
+    instructions: &mut Vec<u8>,
+    command: &str,
+    notes_ref: &NotesRef,
+    oid: &str,
+) {
+    instructions.extend_from_slice(command.as_bytes());
+    instructions.push(b' ');
+    instructions.extend_from_slice(notes_ref.as_str().as_bytes());
+    instructions.push(0);
+    instructions.extend_from_slice(oid.as_bytes());
+    instructions.push(0);
+}
+
+fn run_git_with_stdin<I, S>(
+    git: &Git,
+    operation: &'static str,
+    args: I,
+    stdin: &[u8],
+) -> Result<Vec<u8>, AppError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut child = git_command(git)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| git_error(operation, "git stdin was not available"))?;
+    child_stdin.write_all(stdin)?;
+    drop(child_stdin);
+    let output = child.wait_with_output()?;
+    stdout_from_success(operation, output)
+}
+
+fn git_command(git: &Git) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(&git.root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_PREFIX");
+    command
 }
 
 fn sync_temp_ref(notes_ref: &str) -> Result<String, AppError> {

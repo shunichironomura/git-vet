@@ -68,6 +68,55 @@ impl fmt::Display for ReviewChannel {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChannelTransferKind {
+    Copy,
+    Move,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ChannelTransfer {
+    kind: ChannelTransferKind,
+    source: ReviewChannel,
+    destination: ReviewChannel,
+}
+
+impl ChannelTransfer {
+    pub(crate) fn new(
+        kind: ChannelTransferKind,
+        source: ReviewChannel,
+        destination: ReviewChannel,
+    ) -> Result<Self, ChannelTransferError> {
+        if source == destination {
+            return Err(ChannelTransferError::SameChannel);
+        }
+
+        Ok(Self {
+            kind,
+            source,
+            destination,
+        })
+    }
+
+    pub(crate) const fn kind(&self) -> ChannelTransferKind {
+        self.kind
+    }
+
+    pub(crate) const fn source(&self) -> &ReviewChannel {
+        &self.source
+    }
+
+    pub(crate) const fn destination(&self) -> &ReviewChannel {
+        &self.destination
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub(crate) enum ChannelTransferError {
+    #[error("source and destination channels must differ")]
+    SameChannel,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NotesRef {
     name: String,

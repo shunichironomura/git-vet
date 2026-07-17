@@ -2,6 +2,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::channel::ChannelTransferError;
 use crate::path::{PathError, RepoPath, RepoPathScope};
 use crate::remote::RemoteError;
 
@@ -46,12 +47,30 @@ pub enum AppError {
     DirtyPathsDeclined,
     #[error("invalid review channel {channel:?}: {details}")]
     InvalidChannel { channel: String, details: String },
+    #[error("source and destination channels must differ")]
+    SameChannelTransfer,
+    #[error("source channel {channel:?} has no local review notes")]
+    MissingSourceChannelNotes { channel: String },
+    #[error("destination channel {channel:?} already has local review notes")]
+    ExistingDestinationChannelNotes { channel: String },
+    #[error("source channel {channel:?} has a symbolic notes ref; expected a direct ref")]
+    SymbolicChannelNotesRef { channel: String },
+    #[error("--channel cannot be used with `{command}`; pass SOURCE and DESTINATION explicitly")]
+    ChannelOptionNotAllowed { command: &'static str },
     #[error("sync remote error: {0}")]
     Remote(#[from] RemoteError),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl From<ChannelTransferError> for AppError {
+    fn from(error: ChannelTransferError) -> Self {
+        match error {
+            ChannelTransferError::SameChannel => Self::SameChannelTransfer,
+        }
+    }
 }
 
 impl From<PathError> for AppError {

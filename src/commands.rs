@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
 
-use crate::channel::ReviewChannel;
+use crate::channel::{ChannelTransfer, ChannelTransferKind, ReviewChannel};
 use crate::error::AppError;
 use crate::git::{Git, HistoryChange, HistoryChangeStatus};
 use crate::git_types::{BlobOid, TrackedFile, WorkspaceFile};
-use crate::notes::{GitNotesStore, NoteRemoval, NotesStore};
+use crate::notes::{GitNotesChannelStore, GitNotesStore, NoteRemoval, NotesStore};
 use crate::path::RepoPath;
 use crate::remote::RemoteName;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
@@ -52,6 +52,47 @@ pub(crate) enum DirtyPathHandling {
 pub(crate) enum Gate {
     Open,
     Closed,
+}
+
+pub(crate) fn transfer_channel_notes(
+    git: &Git,
+    channels: &GitNotesChannelStore<'_>,
+    transfer: &ChannelTransfer,
+) -> Result<(), AppError> {
+    channels.transfer(transfer)?;
+
+    match transfer.kind() {
+        ChannelTransferKind::Copy => stdout_line(format_args!(
+            "copied review notes from channel {:?} to {:?}",
+            transfer.source().as_str(),
+            transfer.destination().as_str()
+        ))?,
+        ChannelTransferKind::Move => stdout_line(format_args!(
+            "moved review notes from channel {:?} to {:?}",
+            transfer.source().as_str(),
+            transfer.destination().as_str()
+        ))?,
+    }
+
+    if matches!(transfer.kind(), ChannelTransferKind::Move) {
+        stderr_line(format_args!(
+            "hint: channel selection was not changed; configure vet.channel explicitly if {:?} should be selected by default",
+            transfer.destination().as_str()
+        ))?;
+    }
+
+    let source_policy = format!(".vetignore.{}", transfer.source());
+    if git.root.join(&source_policy).exists() {
+        let action = match transfer.kind() {
+            ChannelTransferKind::Copy => "copied",
+            ChannelTransferKind::Move => "moved",
+        };
+        stderr_line(format_args!(
+            "hint: {source_policy} was not {action}; channel policy files are outside this operation"
+        ))?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn mark_paths(
