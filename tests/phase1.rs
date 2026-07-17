@@ -199,6 +199,11 @@ fn ref_exists(cwd: &Path, ref_name: &str) -> bool {
         .success()
 }
 
+fn ref_target(cwd: &Path, ref_name: &str) -> String {
+    let output = assert_git_success(git_output(cwd, ["rev-parse", "--verify", ref_name]));
+    stdout(&output).trim().to_owned()
+}
+
 fn assert_git_success(output: Output) -> Output {
     assert!(
         output.status.success(),
@@ -935,6 +940,241 @@ fn nested_channel_names_are_rejected() {
     let stderr = stderr(&output);
     assert!(stderr.contains("invalid review channel"), "{stderr}");
     assert!(stderr.contains("must not contain '/'"), "{stderr}");
+}
+
+#[test]
+fn channel_copy_creates_an_exact_independent_review_state_snapshot() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "first\n");
+    repo.write("b.txt", "second\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt", "b.txt"]).status.success());
+
+    repo.write("a.txt", "changed\n");
+    repo.commit_all("change a");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let source_ref = "refs/notes/vet/default";
+    let destination_ref = "refs/notes/vet/release";
+    let source_target = ref_target(repo.path(), source_ref);
+    let source_notes = assert_git_success(git_output(
+        repo.path(),
+        ["notes", "--ref=vet/default", "list"],
+    ));
+
+    let copy = repo.run_vet(&["channel", "copy", "default", "release"]);
+    assert!(copy.status.success(), "copy failed: {}", stderr(&copy));
+    assert!(
+        stdout(&copy).contains("copied review notes from channel \"default\" to \"release\""),
+        "{}",
+        stdout(&copy)
+    );
+    assert_eq!(ref_target(repo.path(), destination_ref), source_target);
+
+    let destination_notes = assert_git_success(git_output(
+        repo.path(),
+        ["notes", "--ref=vet/release", "list"],
+    ));
+    assert_eq!(destination_notes.stdout, source_notes.stdout);
+    let release_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "release"]);
+    assert_eq!(record_for(&release_records, "a.txt")["state"], "vetted");
+    assert_eq!(record_for(&release_records, "b.txt")["state"], "vetted");
+
+    let unmark = repo.run_vet(&["unmark", "a.txt", "--channel", "release"]);
+    assert!(
+        unmark.status.success(),
+        "destination unmark failed: {}",
+        stderr(&unmark)
+    );
+    assert_ne!(
+        ref_target(repo.path(), source_ref),
+        ref_target(repo.path(), destination_ref)
+    );
+    assert_eq!(record_for(&status_json(&repo), "a.txt")["state"], "vetted");
+    let release_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "release"]);
+    assert_ne!(record_for(&release_records, "a.txt")["state"], "vetted");
+}
+
+#[test]
+fn channel_move_atomically_rehomes_local_review_notes() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let source_target = ref_target(repo.path(), "refs/notes/vet/default");
+    let moved = repo.run_vet(&["channel", "move", "default", "user-name"]);
+    assert!(moved.status.success(), "move failed: {}", stderr(&moved));
+    assert!(
+        stdout(&moved).contains("moved review notes from channel \"default\" to \"user-name\""),
+        "{}",
+        stdout(&moved)
+    );
+    assert!(
+        stderr(&moved).contains("channel selection was not changed"),
+        "{}",
+        stderr(&moved)
+    );
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/default"));
+    assert_eq!(
+        ref_target(repo.path(), "refs/notes/vet/user-name"),
+        source_target
+    );
+
+    assert_eq!(record_for(&status_json(&repo), "a.txt")["state"], "new");
+    let moved_records =
+        status_json_with_args(&repo, &["status", "--json", "--channel", "user-name"]);
+    assert_eq!(record_for(&moved_records, "a.txt")["state"], "vetted");
+}
+
+#[test]
+fn channel_transfer_rejects_missing_source_and_identical_endpoints() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let missing = repo.run_vet(&["channel", "copy", "missing", "destination"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        stderr(&missing).contains("source channel \"missing\" has no local review notes"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/destination"));
+
+    let identical = repo.run_vet(&["channel", "move", "same", "same"]);
+    assert_eq!(identical.status.code(), Some(2));
+    assert!(
+        stderr(&identical).contains("source and destination channels must differ"),
+        "{}",
+        stderr(&identical)
+    );
+}
+
+#[test]
+fn channel_transfer_never_merges_or_replaces_an_existing_destination() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "first\n");
+    repo.write("b.txt", "second\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(
+        repo.run_vet(&["mark", "b.txt", "--channel", "release"])
+            .status
+            .success()
+    );
+
+    let source_before = ref_target(repo.path(), "refs/notes/vet/default");
+    let destination_before = ref_target(repo.path(), "refs/notes/vet/release");
+
+    for operation in ["copy", "move"] {
+        let output = repo.run_vet(&["channel", operation, "default", "release"]);
+        assert_eq!(output.status.code(), Some(2), "{operation}");
+        assert!(
+            stderr(&output)
+                .contains("destination channel \"release\" already has local review notes"),
+            "{}",
+            stderr(&output)
+        );
+        assert_eq!(
+            ref_target(repo.path(), "refs/notes/vet/default"),
+            source_before
+        );
+        assert_eq!(
+            ref_target(repo.path(), "refs/notes/vet/release"),
+            destination_before
+        );
+    }
+}
+
+#[test]
+fn channel_transfer_rejects_global_channel_and_ignores_configured_channel() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let selected = repo.run_vet(&[
+        "--channel",
+        "default",
+        "channel",
+        "copy",
+        "default",
+        "release",
+    ]);
+    assert_eq!(selected.status.code(), Some(2));
+    assert!(
+        stderr(&selected).contains("--channel cannot be used with `channel copy`"),
+        "{}",
+        stderr(&selected)
+    );
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/release"));
+
+    run_git(repo.path(), ["config", "vet.channel", "bad..channel"]);
+    let explicit = repo.run_vet(&["channel", "copy", "default", "release"]);
+    assert!(
+        explicit.status.success(),
+        "invalid unrelated config blocked transfer: {}",
+        stderr(&explicit)
+    );
+}
+
+#[test]
+fn channel_transfer_preserves_policy_files_and_does_not_require_user_identity() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    repo.write(".vetignore.default", "generated/**\n");
+
+    run_git(repo.path(), ["config", "--unset", "user.name"]);
+    run_git(repo.path(), ["config", "--unset", "user.email"]);
+    run_git(repo.path(), ["config", "user.useConfigOnly", "true"]);
+
+    let moved = repo.run_vet_without_user_config(&["channel", "move", "default", "user-name"]);
+    assert!(
+        moved.status.success(),
+        "move without identity failed: {}",
+        stderr(&moved)
+    );
+    assert!(
+        stderr(&moved).contains(".vetignore.default was not moved"),
+        "{}",
+        stderr(&moved)
+    );
+    assert_eq!(
+        require(
+            fs::read_to_string(repo.path().join(".vetignore.default")),
+            "read source policy",
+        ),
+        "generated/**\n"
+    );
+    assert!(!repo.path().join(".vetignore.user-name").exists());
+}
+
+#[test]
+fn channel_transfer_reports_invalid_endpoint_roles() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let source = repo.run_vet(&["channel", "copy", "bad/source", "valid"]);
+    assert_eq!(source.status.code(), Some(2));
+    assert!(
+        stderr(&source).contains("SOURCE argument"),
+        "{}",
+        stderr(&source)
+    );
+
+    let destination = repo.run_vet(&["channel", "copy", "valid", "bad/destination"]);
+    assert_eq!(destination.status.code(), Some(2));
+    assert!(
+        stderr(&destination).contains("DESTINATION argument"),
+        "{}",
+        stderr(&destination)
+    );
 }
 
 #[test]

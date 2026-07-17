@@ -79,9 +79,11 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet diff [--workspace] <path>` — show the diff that still needs vetting; `--workspace` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
+- `git vet channel copy <SOURCE> <DESTINATION>` — copy all local review notes into a new channel.
+- `git vet channel move <SOURCE> <DESTINATION>` — move all local review notes into a new channel.
 - `git vet prune` — prune stale Git-note entries.
 
-All commands accept `--channel <name>` to use an independent vetting channel instead of the configured default:
+Commands that operate on one review channel accept `--channel <name>` to use an independent vetting channel instead of the configured default:
 
 ```sh
 git vet --channel security status
@@ -94,6 +96,33 @@ Without `--channel`, `git-vet` uses `git config vet.channel` when set, otherwise
 git config vet.channel security
 git vet status # uses security
 ```
+
+## Copying and moving channel state
+
+Copy all local review notes into a new independent channel with:
+
+```sh
+git vet channel copy default release
+```
+
+Immediately after copying, both notes refs contain exactly the same review state. Later marks and unmarks remain independent between the channels.
+
+Move local review notes to a new channel with:
+
+```sh
+git vet channel move default user-name
+git config vet.channel user-name # optional: select the destination by default
+```
+
+Both channel names are always explicit; `--channel` cannot be combined with these commands. The source must have a local notes ref and the destination must not already have one. The commands never merge or replace destination review state.
+
+Channel transfers are local-only and move review notes, not other channel-associated state. They do not change `vet.channel`, `.vetignore.<channel>`, the working tree, or remote refs. Publish the destination separately when needed:
+
+```sh
+git vet --channel user-name sync
+```
+
+Moving a local channel does not delete an existing remote source ref.
 
 ## Ignoring files
 
