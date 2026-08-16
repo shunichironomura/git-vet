@@ -1,0 +1,2 @@
+[global]
+disable = ["fenced-code-language", "line-length", "no-inline-html"]
