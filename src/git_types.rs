@@ -12,6 +12,10 @@ impl BlobOid {
     pub(crate) const fn new(oid: gix::ObjectId) -> Self {
         Self(oid)
     }
+
+    pub(crate) const fn as_object_id(self) -> gix::ObjectId {
+        self.0
+    }
 }
 
 impl Serialize for BlobOid {

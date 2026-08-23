@@ -25,6 +25,7 @@ pub(crate) enum NoteRemoval {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct NoteListEntry {
+    note: gix::ObjectId,
     annotated: BlobOid,
 }
 
@@ -100,6 +101,8 @@ impl<'git> GitNotesStore<'git> {
     }
 
     fn note_entries(&self) -> Result<Vec<NoteListEntry>, AppError> {
+        // gix exposes point lookups and mutations, but not iteration over every note mapping.
+        // Keep one machine-oriented Git query, then load the returned blobs through gix.
         let ref_arg = self.notes_ref_arg();
         let stdout = self.git_output("listing git notes", ["notes", ref_arg.as_str(), "list"])?;
         let output =
@@ -107,14 +110,22 @@ impl<'git> GitNotesStore<'git> {
         output.lines().map(parse_note_list_entry).collect()
     }
 
-    fn show_note_body(&self, oid: &BlobOid) -> Result<String, AppError> {
-        let ref_arg = self.notes_ref_arg();
-        let oid_arg = oid.to_string();
-        let stdout = self.git_output(
-            "showing git note",
-            ["notes", ref_arg.as_str(), "show", oid_arg.as_str()],
-        )?;
-        String::from_utf8(stdout).map_err(|err| git_error("decoding note body", err))
+    fn note_body_from_blob(&self, note: gix::ObjectId) -> Result<String, AppError> {
+        let blob = self
+            .git
+            .repo
+            .find_blob(note)
+            .map_err(|error| git_error("reading git note blob", error))?;
+        decode_note_body(&blob.data)
+    }
+
+    fn notes_platform(&self) -> Result<gix::note::Platform<'_>, AppError> {
+        self.git
+            .repo
+            .notes()
+            .map_err(|error| git_error("initializing git notes", error))?
+            .with_refs([self.notes_ref.as_str()])
+            .map_err(|error| git_error("selecting review notes ref", error))
     }
 
     pub(crate) const fn notes_ref(&self) -> &NotesRef {
@@ -232,19 +243,6 @@ impl<'git> GitNotesStore<'git> {
         let output = self.git_command().args(args).output()?;
         stdout_from_success(operation, output)
     }
-
-    fn git_output_with_stdin<I, S>(
-        &self,
-        operation: &'static str,
-        args: I,
-        stdin: &str,
-    ) -> Result<Vec<u8>, AppError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_git_with_stdin(self.git, operation, args, stdin.as_bytes())
-    }
 }
 
 impl NotesStore for GitNotesStore<'_> {
@@ -252,7 +250,7 @@ impl NotesStore for GitNotesStore<'_> {
         self.note_entries()?
             .into_iter()
             .try_fold(ReviewedSet::default(), |mut reviewed, entry| {
-                let body = self.show_note_body(&entry.annotated)?;
+                let body = self.note_body_from_blob(entry.note)?;
                 let records = parse_note_records(&body);
                 reviewed
                     .by_blob
@@ -262,56 +260,53 @@ impl NotesStore for GitNotesStore<'_> {
     }
 
     fn note_body(&self, oid: &BlobOid) -> Result<Option<String>, AppError> {
-        if self
-            .note_entries()?
-            .into_iter()
-            .any(|entry| entry.annotated == *oid)
-        {
-            self.show_note_body(oid).map(Some)
-        } else {
-            Ok(None)
+        let mut notes = self.notes_platform()?;
+        let mut found = notes
+            .get(oid.as_object_id())
+            .map_err(|error| git_error("reading git note", error))?;
+        match found.len() {
+            0 => Ok(None),
+            1 => {
+                let note = found.pop().ok_or_else(|| {
+                    git_error(
+                        "reading git note",
+                        "note lookup reported one result but returned none",
+                    )
+                })?;
+                decode_note_body(&note.blob.data).map(Some)
+            }
+            count => Err(git_error(
+                "reading git note",
+                format!("expected at most one note from the selected ref, found {count}"),
+            )),
         }
     }
 
     fn write_note_body(&self, oid: &BlobOid, body: &str) -> Result<(), AppError> {
-        let ref_arg = self.notes_ref_arg();
-        let oid_arg = oid.to_string();
-        self.git_output_with_stdin(
-            "writing git note",
-            [
-                "notes",
-                ref_arg.as_str(),
-                "add",
-                "-f",
-                "--no-stripspace",
-                "-F",
-                "-",
-                oid_arg.as_str(),
-            ],
-            body,
-        )?;
+        self.git
+            .repo
+            .notes()
+            .map_err(|error| git_error("initializing git notes", error))?
+            .replace(self.notes_ref.as_str(), oid.as_object_id(), body.as_bytes())
+            .map_err(|error| git_error("writing git note", error))?;
         Ok(())
     }
 
     fn remove_note(&self, oid: &BlobOid) -> Result<NoteRemoval, AppError> {
-        if self
-            .note_entries()?
-            .into_iter()
-            .any(|entry| entry.annotated == *oid)
-        {
-            let ref_arg = self.notes_ref_arg();
-            let oid_arg = oid.to_string();
-            self.git_output(
-                "removing git note",
-                ["notes", ref_arg.as_str(), "remove", oid_arg.as_str()],
-            )?;
-            Ok(NoteRemoval::Removed)
-        } else {
-            Ok(NoteRemoval::Absent)
-        }
+        self.git
+            .repo
+            .notes()
+            .map_err(|error| git_error("initializing git notes", error))?
+            .remove(self.notes_ref.as_str(), oid.as_object_id())
+            .map(|removed| match removed {
+                Some(_) => NoteRemoval::Removed,
+                None => NoteRemoval::Absent,
+            })
+            .map_err(|error| git_error("removing git note", error))
     }
 
     fn prune(&self) -> Result<(), AppError> {
+        // gix does not yet expose Git's reachability-aware notes pruning behavior.
         let ref_arg = self.notes_ref_arg();
         self.git_output("pruning git notes", ["notes", ref_arg.as_str(), "prune"])?;
         Ok(())
@@ -431,10 +426,11 @@ fn sync_temp_ref(notes_ref: &str) -> Result<String, AppError> {
 fn parse_note_list_entry(line: &str) -> Result<NoteListEntry, AppError> {
     let mut fields = line.split_whitespace();
     match (fields.next(), fields.next(), fields.next()) {
-        (Some(note_oid), Some(annotated), None) => {
-            parse_object_id("parsing notes list note object id", note_oid)?;
+        (Some(note), Some(annotated), None) => {
+            let note = parse_object_id("parsing notes list note object id", note)?;
             parse_object_id("parsing notes list annotated object id", annotated).map(|annotated| {
                 NoteListEntry {
+                    note,
                     annotated: BlobOid::new(annotated),
                 }
             })
@@ -456,6 +452,12 @@ fn parse_note_list_entry(line: &str) -> Result<NoteListEntry, AppError> {
 
 fn parse_object_id(operation: &'static str, oid: &str) -> Result<gix::ObjectId, AppError> {
     gix::ObjectId::from_hex(oid.as_bytes()).map_err(|err| git_error(operation, err))
+}
+
+fn decode_note_body(data: &[u8]) -> Result<String, AppError> {
+    std::str::from_utf8(data)
+        .map(ToOwned::to_owned)
+        .map_err(|error| git_error("decoding note body", error))
 }
 
 fn stdout_from_success(operation: &'static str, output: Output) -> Result<Vec<u8>, AppError> {
