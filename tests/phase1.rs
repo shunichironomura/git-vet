@@ -686,6 +686,30 @@ fn mark_writes_default_channel_git_notes_without_mutating_git_config() {
 }
 
 #[test]
+fn marking_the_same_content_twice_does_not_rewrite_the_note() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let first = repo.run_vet(&["mark", "a.txt"]);
+    assert!(
+        first.status.success(),
+        "first mark failed: {}",
+        stderr(&first)
+    );
+    let notes_ref = "refs/notes/vet/default";
+    let first_target = ref_target(repo.path(), notes_ref);
+
+    let second = repo.run_vet(&["mark", "a.txt"]);
+    assert!(
+        second.status.success(),
+        "second mark failed: {}",
+        stderr(&second)
+    );
+    assert_eq!(ref_target(repo.path(), notes_ref), first_target);
+}
+
+#[test]
 fn status_reads_default_channel_git_notes() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
