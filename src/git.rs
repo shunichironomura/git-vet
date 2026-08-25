@@ -233,9 +233,10 @@ impl Git {
 
     fn origin_fallback_sync_remote(&self) -> Result<RemoteName, AppError> {
         let remote = RemoteName::new("origin", RemoteNameSource::OriginFallback)?;
-        match self.remote_url(&remote)? {
-            Some(_) => Ok(remote),
-            None => Err(RemoteError::NoRemoteSelected.into()),
+        if self.remote_has_fetch_url(&remote)? {
+            Ok(remote)
+        } else {
+            Err(RemoteError::NoRemoteSelected.into())
         }
     }
 
@@ -245,34 +246,26 @@ impl Git {
         source: RemoteNameSource,
     ) -> Result<RemoteName, AppError> {
         let remote = RemoteName::new(remote, source)?;
-        match self.remote_url(&remote)? {
-            Some(_) => Ok(remote),
-            None => Err(RemoteError::UnusableRemote {
+        if self.remote_has_fetch_url(&remote)? {
+            Ok(remote)
+        } else {
+            Err(RemoteError::UnusableRemote {
                 remote: remote.to_string(),
                 name_source: source,
                 details: "remote does not exist or has no fetch URL".to_owned(),
             }
-            .into()),
+            .into())
         }
     }
 
-    fn remote_url(&self, remote: &RemoteName) -> Result<Option<String>, AppError> {
-        let output = self
-            .git_command()
-            .arg("remote")
-            .arg("get-url")
-            .arg(remote.as_str())
-            .output()?;
-
-        if output.status.success() {
-            let url = String::from_utf8(output.stdout)
-                .map_err(|err| git_error("decoding remote URL", err))?
-                .trim()
-                .to_owned();
-            Ok((!url.is_empty()).then_some(url))
-        } else {
-            Ok(None)
-        }
+    fn remote_has_fetch_url(&self, remote: &RemoteName) -> Result<bool, AppError> {
+        self.repo
+            .try_find_remote(remote.as_str().as_bytes().as_bstr())
+            .transpose()
+            .map(|remote| {
+                remote.is_some_and(|remote| remote.url(gix::remote::Direction::Fetch).is_some())
+            })
+            .map_err(|error| git_error("reading sync remote", error))
     }
 
     fn required_config_value(&self, key: ReviewerConfigKey) -> Result<String, AppError> {

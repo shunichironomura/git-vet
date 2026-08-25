@@ -2,6 +2,8 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+use gix::refs::transaction::{Change, PreviousValue, RefEdit, RefLog};
+
 use crate::channel::{ChannelTransfer, ChannelTransferKind, NotesRef};
 use crate::error::{AppError, git_error};
 use crate::git::Git;
@@ -155,21 +157,11 @@ impl<'git> GitNotesStore<'git> {
     }
 
     pub(crate) fn local_ref_exists(&self) -> Result<bool, AppError> {
-        let output = self
-            .git_command()
-            .arg("show-ref")
-            .arg("--verify")
-            .arg("--quiet")
-            .arg(self.notes_ref.as_str())
-            .output()?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => Err(git_error(
-                "checking local notes ref",
-                command_failure_details(&output),
-            )),
-        }
+        self.git
+            .repo
+            .try_find_reference(self.notes_ref.as_str())
+            .map(|reference| reference.is_some())
+            .map_err(|error| git_error("checking local notes ref", error))
     }
 
     pub(crate) fn fetch_remote_notes(
@@ -211,20 +203,23 @@ impl<'git> GitNotesStore<'git> {
     }
 
     pub(crate) fn delete_ref(&self, ref_name: &str) -> Result<(), AppError> {
-        let output = self
-            .git_command()
-            .arg("update-ref")
-            .arg("-d")
-            .arg(ref_name)
-            .output()?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(git_error(
-                "deleting temporary sync notes ref",
-                command_failure_details(&output),
-            ))
-        }
+        let name = gix::refs::FullName::try_from(ref_name)
+            .map_err(|error| git_error("validating temporary sync notes ref", error))?;
+        self.git
+            .repo
+            .edit_references_as(
+                [RefEdit {
+                    change: Change::Delete {
+                        expected: PreviousValue::Any,
+                        log: RefLog::AndReference,
+                    },
+                    name,
+                    deref: false,
+                }],
+                None,
+            )
+            .map(|_| ())
+            .map_err(|error| git_error("deleting temporary sync notes ref", error))
     }
 
     fn notes_ref_arg(&self) -> String {

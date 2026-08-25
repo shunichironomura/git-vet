@@ -1619,6 +1619,7 @@ fn sync_fetches_remote_notes_into_local_channel() {
 
     let after_sync = status_json(&second);
     assert_eq!(record_for(&after_sync, "a.txt")["state"], "vetted");
+    assert!(!ref_exists(second.path(), "refs/notes/vet-sync/default"));
 }
 
 #[test]
@@ -1743,6 +1744,23 @@ fn sync_without_selected_remote_exits_two_with_diagnostic() {
     assert!(stderr.contains("--remote"), "{stderr}");
     assert!(stderr.contains("vet.syncRemote"), "{stderr}");
     assert!(stderr.contains("origin"), "{stderr}");
+}
+
+#[test]
+fn sync_rejects_a_configured_remote_without_a_fetch_url() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    run_git(repo.path(), ["config", "remote.upstream.prune", "true"]);
+
+    let sync = repo.run_vet(&["sync", "--remote", "upstream"]);
+    assert_eq!(sync.status.code(), Some(2));
+    let stderr = stderr(&sync);
+    assert!(stderr.contains("upstream"), "{stderr}");
+    assert!(
+        stderr.contains("does not exist or has no fetch URL"),
+        "{stderr}"
+    );
 }
 
 #[test]
