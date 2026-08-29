@@ -1,4 +1,3 @@
-use std::env;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -98,11 +97,11 @@ pub(crate) enum SyncProgressReporter {
 }
 
 impl SyncProgressReporter {
-    pub(crate) fn from_environment() -> Self {
+    pub(crate) fn from_environment(color: bool) -> Self {
         if interactive_stderr() {
-            Self::Spinner(SpinnerSyncProgress::new(env::var_os("NO_COLOR").is_none()))
+            Self::Spinner(SpinnerSyncProgress::new(color))
         } else {
-            Self::Plain(PlainSyncProgress::new())
+            Self::Plain(PlainSyncProgress::new(color))
         }
     }
 }
@@ -192,11 +191,13 @@ impl SyncProgress for SpinnerSyncProgress {
     }
 }
 
-pub(crate) struct PlainSyncProgress;
+pub(crate) struct PlainSyncProgress {
+    color: bool,
+}
 
 impl PlainSyncProgress {
-    const fn new() -> Self {
-        Self
+    const fn new(color: bool) -> Self {
+        Self { color }
     }
 }
 
@@ -215,13 +216,18 @@ impl SyncProgress for PlainSyncProgress {
 
     fn step_failed(&mut self, step: SyncStep) -> Result<(), AppError> {
         let mut stderr = io::stderr().lock();
-        writeln!(stderr, "✗ Failed while {}", step.gerund())?;
+        writeln!(
+            stderr,
+            "{} Failed while {}",
+            paint("✗", UiStyle::Red, self.color),
+            step.gerund()
+        )?;
         Ok(())
     }
 
     fn finished(&mut self, report: &SyncReport) -> Result<(), AppError> {
         let mut stderr = io::stderr().lock();
-        writeln!(stderr, "{}", final_summary(report, false))?;
+        writeln!(stderr, "{}", final_summary(report, self.color))?;
         writeln!(stderr, "  ref: {}", report.notes_ref)?;
         writeln!(stderr, "  result: {}", report.outcome.details())?;
         Ok(())

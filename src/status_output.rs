@@ -187,12 +187,24 @@ pub(crate) fn human_status(
     output
 }
 
-pub(crate) fn check_status(channel: &ReviewChannel, classified: &[ClassifiedFile]) -> String {
+pub(crate) fn check_status(
+    channel: &ReviewChannel,
+    classified: &[ClassifiedFile],
+    color_enabled: bool,
+) -> String {
     let counts = StatusCounts::from_classified(classified);
     let mut output = String::new();
 
     if counts.all_vetted() {
-        let _ = writeln!(output, "Review gate passed for channel {channel}.");
+        let _ = writeln!(
+            output,
+            "{}",
+            paint(
+                &format!("Review gate passed for channel {channel}."),
+                UiStyle::Green,
+                color_enabled,
+            )
+        );
         let _ = writeln!(
             output,
             "All {} {} are vetted.",
@@ -202,7 +214,15 @@ pub(crate) fn check_status(channel: &ReviewChannel, classified: &[ClassifiedFile
         return output;
     }
 
-    let _ = writeln!(output, "Review gate failed for channel {channel}.\n");
+    let _ = writeln!(
+        output,
+        "{}\n",
+        paint(
+            &format!("Review gate failed for channel {channel}."),
+            UiStyle::Red,
+            color_enabled,
+        )
+    );
     let _ = writeln!(
         output,
         "{} {} {} review:",
@@ -214,7 +234,17 @@ pub(crate) fn check_status(channel: &ReviewChannel, classified: &[ClassifiedFile
         .iter()
         .filter(|file| !matches!(file.state, ReviewState::Vetted))
         .for_each(|file| {
-            let _ = writeln!(output, "  {:<6} {}", file.state.as_str(), file.path);
+            let state_style = match file.state {
+                ReviewState::Vetted => UiStyle::Green,
+                ReviewState::Stale { .. } => UiStyle::Yellow,
+                ReviewState::New => UiStyle::Red,
+            };
+            let rendered_state = paint(
+                &format!("{:<6}", file.state.as_str()),
+                state_style,
+                color_enabled,
+            );
+            let _ = writeln!(output, "  {rendered_state} {}", file.path);
         });
     output
 }

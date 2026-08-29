@@ -19,7 +19,7 @@ mod sync_progress;
 mod ui;
 mod vetignore;
 
-pub use cli::{Cli, run_cli};
+pub use cli::{Cli, CliError, run_cli};
 pub use error::AppError;
 pub use git_types::BlobOid;
 pub use path::RepoPath;

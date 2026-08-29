@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::builder::styling::{AnsiColor, Effects, Styles};
-use clap::{Parser, Subcommand};
+use clap::{ColorChoice, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::channel::{
     ChannelError, ChannelTransfer, ChannelTransferKind, DEFAULT_REVIEW_CHANNEL, ReviewChannel,
@@ -16,6 +16,7 @@ use crate::error::AppError;
 use crate::git::Git;
 use crate::notes::{GitNotesChannelStore, GitNotesStore, NotesStore};
 use crate::sync_progress::SyncProgressReporter;
+use crate::ui::{ColorMode, ColorPolicy};
 
 const CLI_STYLES: Styles = Styles::styled()
     .header(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
@@ -38,8 +39,28 @@ pub struct Cli {
     /// Review channel for commands that operate on one selected channel.
     #[arg(long, global = true)]
     channel: Option<String>,
+    /// Control ANSI color output.
+    #[arg(long, value_enum, global = true)]
+    color: Option<CliColorMode>,
     #[command(subcommand)]
     command: CommandKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CliColorMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl From<CliColorMode> for ColorMode {
+    fn from(mode: CliColorMode) -> Self {
+        match mode {
+            CliColorMode::Auto => Self::Auto,
+            CliColorMode::Always => Self::Always,
+            CliColorMode::Never => Self::Never,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -134,43 +155,88 @@ enum ChannelCommand {
     },
 }
 
-pub fn run_cli() -> Result<ExitCode, AppError> {
-    let Cli { channel, command } = Cli::parse();
-    let git = Git::discover()?;
+pub struct CliError {
+    error: AppError,
+    color_error: bool,
+}
 
+impl CliError {
+    #[must_use]
+    pub const fn error(&self) -> &AppError {
+        &self.error
+    }
+
+    #[must_use]
+    pub const fn color_error(&self) -> bool {
+        self.color_error
+    }
+}
+
+pub fn run_cli() -> Result<ExitCode, CliError> {
+    let environment_color = ColorPolicy::resolve(None);
+    let Cli {
+        channel,
+        color,
+        command,
+    } = parse_cli(environment_color);
+    let color = ColorPolicy::resolve(color.map(Into::into));
+    let git = Git::discover().map_err(|error| CliError {
+        error,
+        color_error: color.stderr(),
+    })?;
+    run_cli_inner(&git, channel.as_deref(), command, color).map_err(|error| CliError {
+        error,
+        color_error: color.stderr(),
+    })
+}
+
+fn parse_cli(color: ColorPolicy) -> Cli {
+    let command = Cli::command().color(if color.stderr() {
+        ColorChoice::Always
+    } else {
+        ColorChoice::Never
+    });
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+fn run_cli_inner(
+    git: &Git,
+    channel: Option<&str>,
+    command: CommandKind,
+    color: ColorPolicy,
+) -> Result<ExitCode, AppError> {
     match command {
-        CommandKind::Channel { command } => run_channel_command(&git, channel.as_deref(), command),
+        CommandKind::Channel { command } => run_channel_command(git, channel, command),
         CommandKind::Mark { paths, allow_dirty } => {
-            with_selected_channel(&git, channel.as_deref(), |_, notes| {
+            with_selected_channel(git, channel, |_, notes| {
                 let dirty_paths = if allow_dirty {
                     DirtyPathHandling::Allow
                 } else {
                     DirtyPathHandling::Prompt
                 };
-                mark_paths(&git, notes, &paths, MarkOptions { dirty_paths })?;
+                mark_paths(git, notes, &paths, MarkOptions { dirty_paths })?;
                 Ok(ExitCode::SUCCESS)
             })
         }
-        CommandKind::Unmark { paths } => {
-            with_selected_channel(&git, channel.as_deref(), |_, notes| {
-                unmark_paths(&git, notes, &paths)?;
-                Ok(ExitCode::SUCCESS)
-            })
-        }
+        CommandKind::Unmark { paths } => with_selected_channel(git, channel, |_, notes| {
+            unmark_paths(git, notes, &paths)?;
+            Ok(ExitCode::SUCCESS)
+        }),
         CommandKind::Status {
             json,
             all,
             check,
             workspace,
             paths,
-        } => with_selected_channel(&git, channel.as_deref(), |channel, notes| {
+        } => with_selected_channel(git, channel, |channel, notes| {
             let target = if workspace {
                 StatusTarget::Workspace
             } else {
                 StatusTarget::Head
             };
             match status(
-                &git,
+                git,
                 notes,
                 channel,
                 StatusMode {
@@ -178,6 +244,7 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
                     all: all || !paths.is_empty(),
                     check,
                     target,
+                    color,
                 },
                 &paths,
             )? {
@@ -185,26 +252,22 @@ pub fn run_cli() -> Result<ExitCode, AppError> {
                 Gate::Closed => Ok(ExitCode::from(1)),
             }
         }),
-        CommandKind::Diff { path, workspace } => {
-            with_selected_channel(&git, channel.as_deref(), |_, notes| {
-                let target = if workspace {
-                    DiffTarget::Workspace
-                } else {
-                    DiffTarget::Head
-                };
-                diff_path(&git, notes, &path, target)?;
-                Ok(ExitCode::SUCCESS)
-            })
-        }
-        CommandKind::Sync { remote } => {
-            with_selected_channel(&git, channel.as_deref(), |channel, notes| {
-                let remote = git.select_sync_remote(remote.as_deref())?;
-                let mut progress = SyncProgressReporter::from_environment();
-                sync_notes(notes, channel, &remote, &mut progress)?;
-                Ok(ExitCode::SUCCESS)
-            })
-        }
-        CommandKind::Prune => with_selected_channel(&git, channel.as_deref(), |_, notes| {
+        CommandKind::Diff { path, workspace } => with_selected_channel(git, channel, |_, notes| {
+            let target = if workspace {
+                DiffTarget::Workspace
+            } else {
+                DiffTarget::Head
+            };
+            diff_path(git, notes, &path, target, color)?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        CommandKind::Sync { remote } => with_selected_channel(git, channel, |channel, notes| {
+            let remote = git.select_sync_remote(remote.as_deref())?;
+            let mut progress = SyncProgressReporter::from_environment(color.stderr());
+            sync_notes(notes, channel, &remote, &mut progress)?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        CommandKind::Prune => with_selected_channel(git, channel, |_, notes| {
             notes.prune()?;
             Ok(ExitCode::SUCCESS)
         }),

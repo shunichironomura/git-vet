@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +16,7 @@ use crate::remote::RemoteName;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
 use crate::status_output::{HumanStatusOptions, check_status, human_status, json_status};
 use crate::sync_progress::{SyncContext, SyncOutcome, SyncProgress, SyncReport, SyncStep};
-use crate::ui::Activity;
+use crate::ui::{Activity, ColorPolicy};
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +25,7 @@ pub(crate) struct StatusMode {
     pub(crate) all: bool,
     pub(crate) check: bool,
     pub(crate) target: StatusTarget,
+    pub(crate) color: ColorPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,7 +260,7 @@ pub(crate) fn status(
         } else {
             Gate::Closed
         };
-        stdout_str(&check_status(channel, &classified))?;
+        stdout_str(&check_status(channel, &classified, mode.color.stdout()))?;
         Ok(gate)
     } else {
         let output = if mode.json {
@@ -271,7 +271,7 @@ pub(crate) fn status(
                 &classified,
                 HumanStatusOptions {
                     show_all: mode.all,
-                    color: human_status_color_enabled(),
+                    color: mode.color.stdout(),
                 },
             )
         };
@@ -280,15 +280,12 @@ pub(crate) fn status(
     }
 }
 
-fn human_status_color_enabled() -> bool {
-    io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
-}
-
 pub(crate) fn diff_path(
     git: &Git,
     notes: &impl NotesStore,
     path: &Path,
     target: DiffTarget,
+    color: ColorPolicy,
 ) -> Result<(), AppError> {
     let path = git.normalize_user_path(path)?;
     let file = git.blob_at_head(&path)?;
@@ -296,8 +293,12 @@ pub(crate) fn diff_path(
     let classified = classify_path(git, &file, &reviewed)?;
 
     match target {
-        DiffTarget::Head => diff_classified_head(git, &path, &file, &classified.state),
-        DiffTarget::Workspace => diff_classified_workspace(git, &file, &classified.state),
+        DiffTarget::Head => {
+            diff_classified_head(git, &path, &file, &classified.state, color.stdout())
+        }
+        DiffTarget::Workspace => {
+            diff_classified_workspace(git, &file, &classified.state, color.stdout())
+        }
     }
 }
 
@@ -306,11 +307,12 @@ fn diff_classified_head(
     path: &RepoPath,
     file: &TrackedFile,
     state: &ReviewState,
+    color: bool,
 ) -> Result<(), AppError> {
     match state {
         ReviewState::Vetted => stdout_line(format_args!("{path} is up to date")),
-        ReviewState::New => git.diff_empty_to_head(file),
-        ReviewState::Stale { baseline } => git.diff_blobs(baseline, &file.blob),
+        ReviewState::New => git.diff_empty_to_head(file, color),
+        ReviewState::Stale { baseline } => git.diff_blobs(baseline, &file.blob, color),
     }
 }
 
@@ -318,11 +320,12 @@ fn diff_classified_workspace(
     git: &Git,
     file: &TrackedFile,
     state: &ReviewState,
+    color: bool,
 ) -> Result<(), AppError> {
     match state {
-        ReviewState::Vetted => git.diff_blob_to_worktree(&file.blob, file),
-        ReviewState::New => git.diff_empty_to_worktree(file),
-        ReviewState::Stale { baseline } => git.diff_blob_to_worktree(baseline, file),
+        ReviewState::Vetted => git.diff_blob_to_worktree(&file.blob, file, color),
+        ReviewState::New => git.diff_empty_to_worktree(file, color),
+        ReviewState::Stale { baseline } => git.diff_blob_to_worktree(baseline, file, color),
     }
 }
 

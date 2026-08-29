@@ -135,6 +135,13 @@ impl TestRepo {
         Self::run_vet_in(self.path(), args)
     }
 
+    fn run_vet_with_env(&self, args: &[&str], name: &str, value: &str) -> Output {
+        Self::vet_command(self.path(), args)
+            .env(name, value)
+            .output()
+            .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")))
+    }
+
     fn run_vet_without_user_config(&self, args: &[&str]) -> Output {
         let empty_global_config = self.path().join(".empty-global-config");
         require(
@@ -335,6 +342,88 @@ fn human_status_is_backlog_first_and_hides_vetted_by_default() {
     assert!(!output.contains("✓ a.txt"), "{output}");
     assert!(output.contains("git vet diff <path>"), "{output}");
     assert!(output.contains("git vet mark <path>"), "{output}");
+}
+
+#[test]
+fn color_mode_controls_human_output_and_respects_color_environment_variables() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+
+    let always = repo.run_vet(&["--color", "always", "status"]);
+    assert!(
+        always.status.success(),
+        "status failed: {}",
+        stderr(&always)
+    );
+    assert!(stdout(&always).contains("\x1b["), "{}", stdout(&always));
+
+    let never = repo.run_vet(&["status", "--color", "never"]);
+    assert!(never.status.success(), "status failed: {}", stderr(&never));
+    assert!(!stdout(&never).contains("\x1b["), "{}", stdout(&never));
+
+    let forced = repo.run_vet_with_env(&["status"], "FORCE_COLOR", "1");
+    assert!(
+        forced.status.success(),
+        "status failed: {}",
+        stderr(&forced)
+    );
+    assert!(stdout(&forced).contains("\x1b["), "{}", stdout(&forced));
+
+    let no_color = repo.run_vet_with_env(&["status"], "NO_COLOR", "1");
+    assert!(
+        no_color.status.success(),
+        "status failed: {}",
+        stderr(&no_color)
+    );
+    assert!(
+        !stdout(&no_color).contains("\x1b["),
+        "{}",
+        stdout(&no_color)
+    );
+
+    let empty_no_color = TestRepo::vet_command(repo.path(), &["status"])
+        .env("FORCE_COLOR", "1")
+        .env("NO_COLOR", "")
+        .output()
+        .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")));
+    assert!(empty_no_color.status.success());
+    assert!(
+        stdout(&empty_no_color).contains("\x1b["),
+        "{}",
+        stdout(&empty_no_color)
+    );
+
+    let forced_with_no_color = TestRepo::vet_command(repo.path(), &["status"])
+        .env("FORCE_COLOR", "1")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")));
+    assert!(forced_with_no_color.status.success());
+    assert!(
+        !stdout(&forced_with_no_color).contains("\x1b["),
+        "{}",
+        stdout(&forced_with_no_color)
+    );
+
+    let cli_override = TestRepo::vet_command(repo.path(), &["--color", "always", "status"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap_or_else(|error| fail(&format!("run git-vet: {error}")));
+    assert!(cli_override.status.success());
+    assert!(
+        stdout(&cli_override).contains("\x1b["),
+        "{}",
+        stdout(&cli_override)
+    );
+
+    let json = repo.run_vet(&["--color", "always", "status", "--json"]);
+    assert!(json.status.success());
+    assert!(!stdout(&json).contains("\x1b["), "{}", stdout(&json));
+
+    let diff = repo.run_vet(&["--color", "always", "diff", "a.txt"]);
+    assert!(diff.status.success(), "diff failed: {}", stderr(&diff));
+    assert!(stdout(&diff).contains("\x1b["), "{}", stdout(&diff));
 }
 
 #[test]

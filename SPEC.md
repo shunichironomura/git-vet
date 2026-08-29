@@ -197,6 +197,12 @@ The channel name is validated as a normal flat review-channel name. The local re
 
 Interactive removal requires confirmation. Non-interactive removal fails unless `--force` is passed. `--channel` is rejected because the target channel is explicit. Removing a channel is irreversible locally; a remote copy, if any, is unaffected.
 
+### 6.5 Color output
+
+Human-readable output accepts the global option `--color=<auto|always|never>`, which may appear before or after the subcommand. `auto` emits ANSI color only when the relevant output stream is a terminal; `always` forces color; and `never` suppresses it. `--json` output is never colored.
+
+When `--color` is omitted, a non-empty `NO_COLOR` selects `never`, a non-empty `FORCE_COLOR` selects `always`, and otherwise `auto` is used. An empty `NO_COLOR=` is treated as unset. Explicit `--color` takes precedence over both environment variables; when both environment variables are set, `NO_COLOR` takes precedence over `FORCE_COLOR`.
+
 ---
 
 ## 7. Key algorithms
