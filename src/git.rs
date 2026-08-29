@@ -345,11 +345,20 @@ impl Git {
         parse_raw_history_changes(&output)
     }
 
-    pub(crate) fn diff_empty_to_head(&self, file: &TrackedFile) -> Result<(), AppError> {
+    pub(crate) fn diff_empty_to_head(
+        &self,
+        file: &TrackedFile,
+        color: bool,
+    ) -> Result<(), AppError> {
         let empty_tree = gix::ObjectId::empty_tree(self.repo.object_hash()).to_string();
         self.stream_git_diff(|command| {
             command
                 .arg("diff")
+                .arg(if color {
+                    "--color=always"
+                } else {
+                    "--no-color"
+                })
                 .arg(empty_tree)
                 .arg("HEAD")
                 .arg("--")
@@ -357,21 +366,40 @@ impl Git {
         })
     }
 
-    pub(crate) fn diff_empty_to_worktree(&self, file: &TrackedFile) -> Result<(), AppError> {
+    pub(crate) fn diff_empty_to_worktree(
+        &self,
+        file: &TrackedFile,
+        color: bool,
+    ) -> Result<(), AppError> {
         let empty_tree = gix::ObjectId::empty_tree(self.repo.object_hash()).to_string();
         self.stream_git_diff(|command| {
             command
                 .arg("diff")
+                .arg(if color {
+                    "--color=always"
+                } else {
+                    "--no-color"
+                })
                 .arg(empty_tree)
                 .arg("--")
                 .arg(file.path.to_os_path_buf());
         })
     }
 
-    pub(crate) fn diff_blobs(&self, baseline: &BlobOid, current: &BlobOid) -> Result<(), AppError> {
+    pub(crate) fn diff_blobs(
+        &self,
+        baseline: &BlobOid,
+        current: &BlobOid,
+        color: bool,
+    ) -> Result<(), AppError> {
         self.stream_git_diff(|command| {
             command
                 .arg("diff")
+                .arg(if color {
+                    "--color=always"
+                } else {
+                    "--no-color"
+                })
                 .arg(baseline.to_string())
                 .arg(current.to_string());
         })
@@ -381,12 +409,18 @@ impl Git {
         &self,
         baseline: &BlobOid,
         file: &TrackedFile,
+        color: bool,
     ) -> Result<(), AppError> {
         let baseline_index = self.synthetic_index_with_blob(file, baseline)?;
         self.stream_git_diff(|command| {
             command
                 .env("GIT_INDEX_FILE", baseline_index.path())
                 .arg("diff")
+                .arg(if color {
+                    "--color=always"
+                } else {
+                    "--no-color"
+                })
                 .arg("--")
                 .arg(file.path.to_os_path_buf());
         })

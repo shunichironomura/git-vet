@@ -54,6 +54,12 @@ git vet status --check
 
 # Gate only a selected file or directory subtree
 git vet status --check src/
+
+# Force colored output when piping to another command
+git vet --color=always status
+
+# Disable colors explicitly
+git vet status --color=never
 ```
 
 By default, `git-vet` looks at committed `HEAD` contents only. Untracked files are not vetted or gated. `git vet status [PATHSPEC...]` limits status to tracked files matching the given file or directory pathspecs, and `--check`, `--json`, and `--workspace` compose with that same scope. Use `git vet status --workspace` to include uncommitted working-tree edits in local status/check output; for example, a local edit to a file whose `HEAD` blob is vetted appears as `stale`. `git vet mark` still records only committed `HEAD:<path>` bytes and warns before marking a path with uncommitted working-tree changes; use `--allow-dirty` to proceed intentionally without the prompt.
@@ -77,6 +83,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet status --workspace [PATHSPEC...]` — classify local working-tree contents instead of committed `HEAD` contents.
 - `git vet status --check [PATHSPEC...]` — print files that are not vetted and exit non-zero if any exist.
 - `git vet diff [--workspace] <path>` — show the diff that still needs vetting; `--workspace` includes local working-tree edits.
+- `git vet --color=<auto|always|never> ...` — control ANSI color output globally; `--color=always` may be placed after the subcommand as well.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
 - `git vet channel list [--json]` — list local review-note channels.
@@ -97,6 +104,17 @@ Without `--channel`, `git-vet` uses `git config vet.channel` when set, otherwise
 ```sh
 git config vet.channel security
 git vet status # uses security
+```
+
+## Color output
+
+Human-readable output uses colors automatically when written to a terminal. Use `--color=always` or `--color=never` to override detection. `--json` output is never colored.
+
+The `FORCE_COLOR` environment variable enables colors even when output is redirected. A non-empty `NO_COLOR` disables colors; `NO_COLOR=` is treated as unset. Explicit `--color` takes precedence over both variables, and `NO_COLOR` takes precedence over `FORCE_COLOR`.
+
+```sh
+FORCE_COLOR=1 git vet status
+git vet --color=never status
 ```
 
 ## Copying and moving channel state

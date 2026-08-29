@@ -18,6 +18,6 @@ The library modules form a directed acyclic graph (DAG). The list below is topol
 10. `status_output` — human-readable, colored, JSON, and check-mode status rendering.
 11. `sync_progress` — typed sync progress steps/outcomes plus interactive spinner and plain non-TTY renderers for sync progress.
 12. `commands` — command workflows and core orchestration, including dirty-path prompting, sync progress orchestration, and review-state classification.
-13. `cli` — clap-based CLI shell, global `--channel`, channel selection via CLI/config/default priority, subcommand dispatch, repository/notes-store construction, TTY-aware progress-reporter selection, and process exit-code mapping.
+13. `cli` — clap-based CLI shell, global `--channel` and `--color`, channel selection via CLI/config/default priority, color-policy resolution, subcommand dispatch, repository/notes-store construction, TTY-aware progress-reporter selection, and process exit-code mapping.
 
 `src/lib.rs` declares these modules and re-exports the public API used by the binary and external callers. `src/main.rs` is only the binary entry point: it delegates to `run_cli` and maps errors to exit code `2`.
