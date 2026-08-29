@@ -15,10 +15,7 @@ impl Activity {
         } else {
             ProgressBar::hidden()
         };
-        spinner.set_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-        );
+        spinner.set_style(ProgressStyle::default_spinner());
         spinner.set_message(message.into());
         spinner.enable_steady_tick(Duration::from_millis(80));
         Self { spinner }

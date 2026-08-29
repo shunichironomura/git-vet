@@ -151,10 +151,7 @@ pub(crate) struct SpinnerSyncProgress {
 
 impl SpinnerSyncProgress {
     fn new(color: bool) -> Self {
-        let spinner = ProgressBar::new_spinner().with_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
-        );
+        let spinner = ProgressBar::new_spinner().with_style(ProgressStyle::default_spinner());
         spinner.enable_steady_tick(Duration::from_millis(80));
         Self { spinner, color }
     }
