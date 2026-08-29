@@ -79,6 +79,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet diff [--workspace] <path>` — show the diff that still needs vetting; `--workspace` includes local working-tree edits.
 - `git vet mark [--allow-dirty] <paths...>` — mark current `HEAD` contents as vetted.
 - `git vet unmark <paths...>` — remove vetting from current `HEAD` contents.
+- `git vet channel list [--json]` — list local review-note channels.
 - `git vet channel copy <SOURCE> <DESTINATION>` — copy all local review notes into a new channel.
 - `git vet channel move <SOURCE> <DESTINATION>` — move all local review notes into a new channel.
 - `git vet prune` — prune stale Git-note entries.

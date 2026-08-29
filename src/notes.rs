@@ -4,7 +4,7 @@ use std::process::{Command, Output, Stdio};
 
 use gix::refs::transaction::{Change, PreviousValue, RefEdit, RefLog};
 
-use crate::channel::{ChannelTransfer, ChannelTransferKind, NotesRef};
+use crate::channel::{ChannelTransfer, ChannelTransferKind, NotesRef, ReviewChannel};
 use crate::error::{AppError, git_error};
 use crate::git::Git;
 use crate::git_types::BlobOid;
@@ -44,6 +44,37 @@ pub(crate) struct GitNotesChannelStore<'git> {
 impl<'git> GitNotesChannelStore<'git> {
     pub(crate) const fn new(git: &'git Git) -> Self {
         Self { git }
+    }
+
+    pub(crate) fn list(&self) -> Result<Vec<ReviewChannel>, AppError> {
+        let reference_platform = self
+            .git
+            .repo
+            .references()
+            .map_err(|error| git_error("opening Git references", error))?;
+        let references = reference_platform
+            .prefixed("refs/notes/vet/")
+            .map_err(|error| git_error("listing review channel references", error))?;
+
+        references
+            .map(|reference| {
+                let reference = reference
+                    .map_err(|error| git_error("reading review channel reference", error))?;
+                let name = reference.name().as_bstr();
+                let name = std::str::from_utf8(name)
+                    .map_err(|error| git_error("decoding review channel reference", error))?;
+                let channel_name = name.strip_prefix("refs/notes/vet/").ok_or_else(|| {
+                    git_error(
+                        "listing review channel references",
+                        format!("unexpected reference name {name:?}"),
+                    )
+                })?;
+                ReviewChannel::new(channel_name).map_err(|error| AppError::InvalidChannel {
+                    channel: channel_name.to_owned(),
+                    details: format!("from local notes ref: {error}"),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn transfer(&self, transfer: &ChannelTransfer) -> Result<(), AppError> {

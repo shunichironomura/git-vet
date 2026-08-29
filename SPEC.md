@@ -145,6 +145,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | `git vet review [--allow-dirty] <paths…>` | Convenience: `diff` then prompt then `mark` for each path in the selected channel. |
 | `git vet log <path>` | Show provenance records for the current blob of `<path>` in the selected channel (who reviewed this content, when, at which commit). |
 | `git vet unmark <paths…>` | Remove the note on the current blob of each path in the selected channel, forcing re-review. (Affects all paths sharing that blob in that channel — see §9.) |
+| `git vet channel list [--json]` | List local review-note channels, sorted by channel name. `--json` emits `{ "channels": [ { "name": str, "ref": str } ] }`. This command does not use `--channel`. |
 | `git vet channel copy <source> <destination>` | Copy the source channel's complete local review-notes ref into a new destination channel. |
 | `git vet channel move <source> <destination>` | Atomically move the source channel's complete local review-notes ref to a new destination channel. |
 | `git vet sync [--remote <name>]` | Fetch, merge, and push `refs/notes/vet/<channel>` using the selected remote. |

@@ -57,6 +57,8 @@ pub enum AppError {
     SymbolicChannelNotesRef { channel: String },
     #[error("--channel cannot be used with `{command}`; pass SOURCE and DESTINATION explicitly")]
     ChannelOptionNotAllowed { command: &'static str },
+    #[error("--channel cannot be used with `channel list`; listing is not channel-scoped")]
+    ChannelOptionNotAllowedForList,
     #[error("sync remote error: {0}")]
     Remote(#[from] RemoteError),
     #[error("I/O error: {0}")]

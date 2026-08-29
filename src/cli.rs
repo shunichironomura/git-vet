@@ -8,7 +8,7 @@ use crate::channel::{
 };
 use crate::commands::{
     DiffTarget, DirtyPathHandling, Gate, MarkOptions, StatusMode, StatusTarget, diff_path,
-    mark_paths, status, sync_notes, transfer_channel_notes, unmark_paths,
+    list_channels, mark_paths, status, sync_notes, transfer_channel_notes, unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
@@ -86,6 +86,12 @@ enum CommandKind {
 
 #[derive(Subcommand, Debug)]
 enum ChannelCommand {
+    /// List local review-note channels.
+    List {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Copy all local review notes into a new channel.
     Copy {
         /// Channel whose local review notes are copied.
@@ -189,6 +195,15 @@ fn run_channel_command(
     command: ChannelCommand,
 ) -> Result<ExitCode, AppError> {
     let (command_name, kind, source, destination) = match command {
+        ChannelCommand::List { json } => {
+            if explicit_channel.is_some() {
+                return Err(AppError::ChannelOptionNotAllowedForList);
+            }
+
+            let channels = GitNotesChannelStore::new(git);
+            list_channels(&channels, json)?;
+            return Ok(ExitCode::SUCCESS);
+        }
         ChannelCommand::Copy {
             source,
             destination,
