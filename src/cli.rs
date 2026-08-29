@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand};
 
 use crate::channel::{
@@ -16,11 +17,22 @@ use crate::git::Git;
 use crate::notes::{GitNotesChannelStore, GitNotesStore, NotesStore};
 use crate::sync_progress::SyncProgressReporter;
 
+const CLI_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::BrightGreen.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::BrightRed.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::BrightGreen.on_default())
+    .invalid(AnsiColor::BrightYellow.on_default());
+
 #[derive(Parser, Debug)]
 #[command(
     name = "git-vet",
     version,
-    about = "Track human review state for Git-tracked file contents"
+    about = "Track human review state for Git-tracked file contents",
+    styles = CLI_STYLES,
+    after_help = "Typical workflow:\n  git vet status\n  git vet diff <path>\n  git vet mark <path>\n  git vet status --check"
 )]
 pub struct Cli {
     /// Review channel for commands that operate on one selected channel.
