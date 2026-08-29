@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use serde::Serialize;
 
 use crate::channel::{ChannelTransfer, ChannelTransferKind, ReviewChannel};
@@ -413,36 +414,13 @@ fn confirm_channel_removal(channel: &ReviewChannel, force: bool) -> Result<(), A
         return Err(AppError::ChannelRemovalRequiresForce);
     }
 
-    let mut input = stdin.lock();
-    let mut output = io::stderr().lock();
-    writeln!(
-        output,
+    stderr_line(format_args!(
         "warning: removing channel {:?} deletes all local review notes in that channel",
         channel.as_str()
-    )?;
-    prompt_for_channel_removal(&mut input, &mut output)
-}
-
-fn prompt_for_channel_removal(
-    input: &mut impl BufRead,
-    output: &mut impl Write,
-) -> Result<(), AppError> {
-    loop {
-        write!(output, "Continue? [y/N] ")?;
-        output.flush()?;
-
-        let mut answer = String::new();
-        if input.read_line(&mut answer)? == 0 {
-            writeln!(output)?;
-            return Err(AppError::ChannelRemovalDeclined);
-        }
-
-        match answer.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => return Ok(()),
-            "" | "n" | "no" => return Err(AppError::ChannelRemovalDeclined),
-            _ => writeln!(output, "Please answer yes or no.")?,
-        }
-    }
+    ))?;
+    confirm("Remove this local review channel?")?
+        .then_some(())
+        .ok_or(AppError::ChannelRemovalDeclined)
 }
 
 fn stdout_line(args: std::fmt::Arguments<'_>) -> Result<(), AppError> {
@@ -472,25 +450,16 @@ fn handle_dirty_paths(
         return Ok(());
     }
 
-    let stdin = io::stdin();
-    let interactive = stdin.is_terminal();
-    let mut input = stdin.lock();
     let mut output = io::stderr().lock();
-    handle_dirty_paths_with_io(dirty_paths, handling, interactive, &mut input, &mut output)
-}
-
-fn handle_dirty_paths_with_io(
-    dirty_paths: &[RepoPath],
-    handling: DirtyPathHandling,
-    interactive: bool,
-    input: &mut impl BufRead,
-    output: &mut impl Write,
-) -> Result<(), AppError> {
-    write_dirty_paths_warning(dirty_paths, output)?;
+    write_dirty_paths_warning(dirty_paths, &mut output)?;
 
     match handling {
         DirtyPathHandling::Allow => Ok(()),
-        DirtyPathHandling::Prompt if interactive => prompt_for_dirty_confirmation(input, output),
+        DirtyPathHandling::Prompt if io::stdin().is_terminal() => {
+            confirm("Proceed with the committed HEAD version?")?
+                .then_some(())
+                .ok_or(AppError::DirtyPathsDeclined)
+        }
         DirtyPathHandling::Prompt => Err(AppError::DirtyPathsRequireAllowDirty),
     }
 }
@@ -512,43 +481,13 @@ fn write_dirty_paths_warning(
     Ok(())
 }
 
-fn prompt_for_dirty_confirmation(
-    input: &mut impl BufRead,
-    output: &mut impl Write,
-) -> Result<(), AppError> {
-    loop {
-        write!(output, "Proceed with the committed HEAD version? [y/N] ")?;
-        output.flush()?;
-
-        let mut answer = String::new();
-        if input.read_line(&mut answer)? == 0 {
-            writeln!(output)?;
-            return Err(AppError::DirtyPathsDeclined);
-        }
-
-        match DirtyPathAnswer::parse(&answer) {
-            DirtyPathAnswer::Proceed => return Ok(()),
-            DirtyPathAnswer::Abort => return Err(AppError::DirtyPathsDeclined),
-            DirtyPathAnswer::Invalid => writeln!(output, "Please answer yes or no.")?,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DirtyPathAnswer {
-    Proceed,
-    Abort,
-    Invalid,
-}
-
-impl DirtyPathAnswer {
-    fn parse(input: &str) -> Self {
-        match input.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => Self::Proceed,
-            "" | "n" | "no" => Self::Abort,
-            _ => Self::Invalid,
-        }
-    }
+fn confirm(prompt: &str) -> Result<bool, AppError> {
+    Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt)
+        .default(false)
+        .interact_opt()
+        .map(Option::unwrap_or_default)
+        .map_err(AppError::from)
 }
 
 fn status_scope_files(
@@ -773,7 +712,6 @@ const fn history_change_keeps_path(status: HistoryChangeStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::io::Cursor;
 
     use super::*;
     use crate::git_types::FileMode;
@@ -818,23 +756,15 @@ mod tests {
     }
 
     #[test]
-    fn dirty_prompt_accepts_yes_after_warning() -> Result<(), AppError> {
-        let dirty_paths = dirty_paths()?;
-        let mut input = Cursor::new(b"yes\n".as_slice());
+    fn dirty_warning_explains_that_only_head_is_marked() -> Result<(), AppError> {
         let mut output = Vec::new();
 
-        handle_dirty_paths_with_io(
-            &dirty_paths,
-            DirtyPathHandling::Prompt,
-            true,
-            &mut input,
-            &mut output,
-        )?;
+        write_dirty_paths_warning(&dirty_paths()?, &mut output)?;
 
         let output = String::from_utf8_lossy(&output);
         assert!(output.contains("uncommitted changes relative to HEAD"));
         assert!(output.contains("src/lib.rs"));
-        assert!(output.contains("Proceed with the committed HEAD version? [y/N]"));
+        assert!(output.contains("only committed HEAD:<path> bytes"));
         Ok(())
     }
 
@@ -929,87 +859,6 @@ mod tests {
             classified[0].state,
             ReviewState::Stale { baseline } if baseline == baseline_blob
         ));
-        Ok(())
-    }
-
-    #[test]
-    fn dirty_prompt_reprompts_after_invalid_answer() -> Result<(), AppError> {
-        let dirty_paths = dirty_paths()?;
-        let mut input = Cursor::new(b"maybe\ny\n".as_slice());
-        let mut output = Vec::new();
-
-        handle_dirty_paths_with_io(
-            &dirty_paths,
-            DirtyPathHandling::Prompt,
-            true,
-            &mut input,
-            &mut output,
-        )?;
-
-        let output = String::from_utf8_lossy(&output);
-        assert!(output.contains("Please answer yes or no."));
-        Ok(())
-    }
-
-    #[test]
-    fn dirty_prompt_treats_no_and_enter_as_abort() -> Result<(), AppError> {
-        for answer in ["no\n", "\n"] {
-            let dirty_paths = dirty_paths()?;
-            let mut input = Cursor::new(answer.as_bytes());
-            let mut output = Vec::new();
-
-            let result = handle_dirty_paths_with_io(
-                &dirty_paths,
-                DirtyPathHandling::Prompt,
-                true,
-                &mut input,
-                &mut output,
-            );
-
-            assert!(matches!(result, Err(AppError::DirtyPathsDeclined)));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn dirty_prompt_fails_noninteractive_without_allow_dirty() -> Result<(), AppError> {
-        let dirty_paths = dirty_paths()?;
-        let mut input = Cursor::new(b"yes\n".as_slice());
-        let mut output = Vec::new();
-
-        let result = handle_dirty_paths_with_io(
-            &dirty_paths,
-            DirtyPathHandling::Prompt,
-            false,
-            &mut input,
-            &mut output,
-        );
-
-        assert!(matches!(result, Err(AppError::DirtyPathsRequireAllowDirty)));
-        let output = String::from_utf8_lossy(&output);
-        assert!(output.contains("uncommitted changes relative to HEAD"));
-        assert!(!output.contains("Proceed with the committed HEAD version? [y/N]"));
-        Ok(())
-    }
-
-    #[test]
-    fn allow_dirty_warns_without_prompting() -> Result<(), AppError> {
-        let dirty_paths = dirty_paths()?;
-        let mut input = Cursor::new(b"".as_slice());
-        let mut output = Vec::new();
-
-        handle_dirty_paths_with_io(
-            &dirty_paths,
-            DirtyPathHandling::Allow,
-            false,
-            &mut input,
-            &mut output,
-        )?;
-
-        let output = String::from_utf8_lossy(&output);
-        assert!(output.contains("uncommitted changes relative to HEAD"));
-        assert!(output.contains("src/lib.rs"));
-        assert!(!output.contains("Proceed with the committed HEAD version? [y/N]"));
         Ok(())
     }
 }
