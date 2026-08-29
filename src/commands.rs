@@ -4,6 +4,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
+use serde::Serialize;
 
 use crate::channel::{ChannelTransfer, ChannelTransferKind, ReviewChannel};
 use crate::error::AppError;
@@ -52,6 +53,49 @@ pub(crate) enum DirtyPathHandling {
 pub(crate) enum Gate {
     Open,
     Closed,
+}
+
+#[derive(Serialize)]
+struct JsonChannel<'a> {
+    name: &'a str,
+    #[serde(rename = "ref")]
+    notes_ref: &'a str,
+}
+
+#[derive(Serialize)]
+struct JsonChannelList<'a> {
+    channels: Vec<JsonChannel<'a>>,
+}
+
+pub(crate) fn list_channels(
+    channels: &GitNotesChannelStore<'_>,
+    json: bool,
+) -> Result<(), AppError> {
+    let mut channels = channels.list()?;
+    channels.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+
+    if json {
+        let document = JsonChannelList {
+            channels: channels
+                .iter()
+                .map(|channel| JsonChannel {
+                    name: channel.as_str(),
+                    notes_ref: channel.notes_ref().as_str(),
+                })
+                .collect(),
+        };
+        let output = serde_json::to_string_pretty(&document)?;
+        return stdout_line(format_args!("{output}"));
+    }
+
+    if channels.is_empty() {
+        return stdout_line(format_args!("No local review channels found."));
+    }
+
+    stdout_line(format_args!("Review channels:"))?;
+    channels
+        .iter()
+        .try_for_each(|channel| stdout_line(format_args!("  {}", channel.as_str())))
 }
 
 pub(crate) fn transfer_channel_notes(

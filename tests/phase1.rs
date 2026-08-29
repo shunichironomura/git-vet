@@ -967,6 +967,46 @@ fn nested_channel_names_are_rejected() {
 }
 
 #[test]
+fn channel_list_shows_local_channels_in_stable_human_and_json_forms() {
+    let repo = TestRepo::new();
+
+    let empty = repo.run_vet(&["channel", "list"]);
+    assert!(empty.status.success(), "list failed: {}", stderr(&empty));
+    assert_eq!(stdout(&empty), "No local review channels found.\n");
+
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    let copy = repo.run_vet(&["channel", "copy", "default", "release"]);
+    assert!(copy.status.success(), "copy failed: {}", stderr(&copy));
+
+    let human = repo.run_vet(&["channel", "list"]);
+    assert!(human.status.success(), "list failed: {}", stderr(&human));
+    assert_eq!(stdout(&human), "Review channels:\n  default\n  release\n");
+
+    let json = repo.run_vet(&["channel", "list", "--json"]);
+    assert!(
+        json.status.success(),
+        "list --json failed: {}",
+        stderr(&json)
+    );
+    let document: Value = require(serde_json::from_slice(&json.stdout), "channel list JSON");
+    assert_eq!(
+        document,
+        serde_json::json!({
+            "channels": [
+                {"name": "default", "ref": "refs/notes/vet/default"},
+                {"name": "release", "ref": "refs/notes/vet/release"}
+            ]
+        })
+    );
+
+    let scoped = repo.run_vet(&["channel", "list", "--channel", "default"]);
+    assert_eq!(scoped.status.code(), Some(2));
+    assert!(stderr(&scoped).contains("--channel cannot be used with `channel list`"));
+}
+
+#[test]
 fn channel_copy_creates_an_exact_independent_review_state_snapshot() {
     let repo = TestRepo::new();
     repo.write("a.txt", "first\n");
