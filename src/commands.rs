@@ -98,6 +98,25 @@ pub(crate) fn list_channels(
         .try_for_each(|channel| stdout_line(format_args!("  {}", channel.as_str())))
 }
 
+pub(crate) fn remove_channel(
+    channels: &GitNotesChannelStore<'_>,
+    channel: &ReviewChannel,
+    force: bool,
+) -> Result<(), AppError> {
+    if !channels.exists(channel)? {
+        return Err(AppError::MissingChannelNotes {
+            channel: channel.to_string(),
+        });
+    }
+
+    confirm_channel_removal(channel, force)?;
+    channels.remove(channel)?;
+    stdout_line(format_args!(
+        "removed review channel {:?}",
+        channel.as_str()
+    ))
+}
+
 pub(crate) fn transfer_channel_notes(
     git: &Git,
     channels: &GitNotesChannelStore<'_>,
@@ -380,6 +399,48 @@ fn run_sync_step<T>(
         Err(error) => {
             progress.step_failed(step)?;
             Err(error)
+        }
+    }
+}
+
+fn confirm_channel_removal(channel: &ReviewChannel, force: bool) -> Result<(), AppError> {
+    if force {
+        return Ok(());
+    }
+
+    let stdin = io::stdin();
+    if !stdin.is_terminal() {
+        return Err(AppError::ChannelRemovalRequiresForce);
+    }
+
+    let mut input = stdin.lock();
+    let mut output = io::stderr().lock();
+    writeln!(
+        output,
+        "warning: removing channel {:?} deletes all local review notes in that channel",
+        channel.as_str()
+    )?;
+    prompt_for_channel_removal(&mut input, &mut output)
+}
+
+fn prompt_for_channel_removal(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<(), AppError> {
+    loop {
+        write!(output, "Continue? [y/N] ")?;
+        output.flush()?;
+
+        let mut answer = String::new();
+        if input.read_line(&mut answer)? == 0 {
+            writeln!(output)?;
+            return Err(AppError::ChannelRemovalDeclined);
+        }
+
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(()),
+            "" | "n" | "no" => return Err(AppError::ChannelRemovalDeclined),
+            _ => writeln!(output, "Please answer yes or no.")?,
         }
     }
 }

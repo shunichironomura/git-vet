@@ -148,6 +148,7 @@ Invoked as `git vet <cmd>`, `git-vet <cmd>`, or `vet <cmd>` (§10) — identical
 | `git vet channel list [--json]` | List local review-note channels, sorted by channel name. `--json` emits `{ "channels": [ { "name": str, "ref": str } ] }`. This command does not use `--channel`. |
 | `git vet channel copy <source> <destination>` | Copy the source channel's complete local review-notes ref into a new destination channel. |
 | `git vet channel move <source> <destination>` | Atomically move the source channel's complete local review-notes ref to a new destination channel. |
+| `git vet channel remove <channel> [--force]` | Remove the channel's complete local review-notes ref after confirmation. |
 | `git vet sync [--remote <name>]` | Fetch, merge, and push `refs/notes/vet/<channel>` using the selected remote. |
 | `git vet prune` | Remove notes for blobs no longer present in the selected channel (`git notes --ref=vet/<channel> prune`). |
 
@@ -183,6 +184,18 @@ Both endpoint names are required and validated as normal flat review-channel nam
 The complete notes ref is transferred without enumerating or rewriting note bodies. This includes notes on historical blobs not present at `HEAD`; provenance records remain byte-for-byte unchanged.
 
 Transfers do not consult or modify `vet.channel`, `.vetignore`, `.vetignore.<channel>`, the working tree, or remote refs, and they perform no network access. `--channel` is rejected because both endpoints are explicit. Publish the destination with a separate `git vet --channel <destination> sync`. Moving a local source does not delete a source ref that already exists on a remote.
+
+### 6.4 Channel removal
+
+`channel remove` operates on one explicitly named local channel:
+
+```text
+git vet channel remove <channel> [--force]
+```
+
+The channel name is validated as a normal flat review-channel name. The local ref `refs/notes/vet/<channel>` must exist. Removal deletes that ref as a whole without enumerating or rewriting note bodies. It does not modify `vet.channel`, `.vetignore` files, working-tree files, or remote refs, and performs no network access.
+
+Interactive removal requires confirmation. Non-interactive removal fails unless `--force` is passed. `--channel` is rejected because the target channel is explicit. Removing a channel is irreversible locally; a remote copy, if any, is unaffected.
 
 ---
 

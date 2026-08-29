@@ -77,6 +77,52 @@ impl<'git> GitNotesChannelStore<'git> {
             .collect()
     }
 
+    pub(crate) fn exists(&self, channel: &ReviewChannel) -> Result<bool, AppError> {
+        self.git
+            .repo
+            .try_find_reference(channel.notes_ref().as_str())
+            .map(|reference| reference.is_some())
+            .map_err(|error| git_error("checking review channel notes ref", error))
+    }
+
+    pub(crate) fn remove(&self, channel: &ReviewChannel) -> Result<(), AppError> {
+        let notes_ref = channel.notes_ref();
+        let target = self
+            .git
+            .repo
+            .try_find_reference(notes_ref.as_str())
+            .map_err(|error| git_error("reading review channel notes ref", error))?
+            .ok_or_else(|| AppError::MissingChannelNotes {
+                channel: channel.to_string(),
+            })?
+            .target()
+            .try_id()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| AppError::SymbolicChannelNotesRef {
+                channel: channel.to_string(),
+            })?;
+        let name = gix::refs::FullName::try_from(notes_ref.as_str())
+            .map_err(|error| git_error("validating review channel notes ref", error))?;
+
+        self.git
+            .repo
+            .edit_references_as(
+                [RefEdit {
+                    change: Change::Delete {
+                        expected: PreviousValue::MustExistAndMatch(gix::refs::Target::Object(
+                            target,
+                        )),
+                        log: RefLog::AndReference,
+                    },
+                    name,
+                    deref: false,
+                }],
+                None,
+            )
+            .map(|_| ())
+            .map_err(|error| git_error("removing review channel", error))
+    }
+
     pub(crate) fn transfer(&self, transfer: &ChannelTransfer) -> Result<(), AppError> {
         let source_ref = transfer.source().notes_ref();
         let destination_ref = transfer.destination().notes_ref();

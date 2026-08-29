@@ -96,6 +96,9 @@ Goal: finish the remaining command surface and improve team workflows without ch
 - `git-vet [--channel <channel>] unmark <paths...>`
   - Remove the note for each current blob.
   - Warn that this affects all paths sharing the same blob.
+- `git-vet channel remove <channel> [--force]`
+  - Remove the complete local notes ref after interactive confirmation.
+  - Require `--force` in non-interactive use; never modify remote refs or `vet.channel`.
 - `git-vet [--channel <channel>] sync [--remote <name>]`
   - Fetch `refs/notes/vet/<channel>` into a temporary notes ref, merge with explicit `git notes merge -s cat_sort_uniq` semantics, and push the selected channel ref.
   - Do not persistently write `notes.mergeStrategy`; pass `-s cat_sort_uniq` for each notes merge.
