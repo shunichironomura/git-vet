@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
+use console::{Style, measure_text_width};
 use serde::Serialize;
 
 use crate::channel::ReviewChannel;
@@ -82,7 +83,7 @@ impl StatusCounts {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Color {
+enum UiStyle {
     Green,
     Yellow,
     Red,
@@ -90,14 +91,14 @@ enum Color {
     Bold,
 }
 
-impl Color {
-    const fn ansi_code(self) -> &'static str {
+impl UiStyle {
+    const fn console_style(self) -> Style {
         match self {
-            Self::Green => "32",
-            Self::Yellow => "33",
-            Self::Red => "31",
-            Self::Dim => "2",
-            Self::Bold => "1",
+            Self::Green => Style::new().green(),
+            Self::Yellow => Style::new().yellow(),
+            Self::Red => Style::new().red(),
+            Self::Dim => Style::new().dim(),
+            Self::Bold => Style::new().bold(),
         }
     }
 }
@@ -138,7 +139,7 @@ pub(crate) fn human_status(
         let _ = writeln!(
             output,
             "  {} All files are vetted.",
-            paint("✓", Color::Green, options.color)
+            paint("✓", UiStyle::Green, options.color)
         );
         if options.show_all {
             output.push('\n');
@@ -163,7 +164,7 @@ pub(crate) fn human_status(
         classified,
         |state| matches!(state, ReviewState::New),
         "✗",
-        Color::Red,
+        UiStyle::Red,
         options.color,
     );
     push_actionable_group(
@@ -172,7 +173,7 @@ pub(crate) fn human_status(
         classified,
         |state| matches!(state, ReviewState::Stale { .. }),
         "~",
-        Color::Yellow,
+        UiStyle::Yellow,
         options.color,
     );
 
@@ -229,7 +230,7 @@ fn push_header(
         "{}\n",
         paint(
             &format!("git vet · channel {channel}"),
-            Color::Bold,
+            UiStyle::Bold,
             color_enabled
         )
     );
@@ -244,11 +245,11 @@ fn push_header(
     );
 }
 
-const fn progress_color(counts: StatusCounts) -> Color {
+const fn progress_color(counts: StatusCounts) -> UiStyle {
     if counts.all_vetted() {
-        Color::Green
+        UiStyle::Green
     } else {
-        Color::Yellow
+        UiStyle::Yellow
     }
 }
 
@@ -267,7 +268,7 @@ fn push_actionable_group(
     classified: &[ClassifiedFile],
     include: impl Fn(&ReviewState) -> bool,
     symbol: &str,
-    color: Color,
+    color: UiStyle,
     color_enabled: bool,
 ) {
     let files = classified
@@ -278,7 +279,7 @@ fn push_actionable_group(
         return;
     }
 
-    let _ = writeln!(output, "{}:", paint(title, Color::Bold, color_enabled));
+    let _ = writeln!(output, "{}:", paint(title, UiStyle::Bold, color_enabled));
     push_file_lines(
         output,
         &files,
@@ -304,7 +305,7 @@ fn push_hidden_vetted_summary(output: &mut String, counts: StatusCounts, color_e
                 counts.vetted,
                 plural(counts.vetted, "file", "files")
             ),
-            Color::Dim,
+            UiStyle::Dim,
             color_enabled
         )
     );
@@ -319,12 +320,12 @@ fn push_vetted_group(output: &mut String, classified: &[ClassifiedFile], color_e
         return;
     }
 
-    let _ = writeln!(output, "{}:", paint("Vetted", Color::Bold, color_enabled));
+    let _ = writeln!(output, "{}:", paint("Vetted", UiStyle::Bold, color_enabled));
     push_file_lines(
         output,
         &files,
         "✓",
-        Color::Green,
+        UiStyle::Green,
         color_enabled,
         MetadataVerb::Reviewed,
     );
@@ -350,13 +351,13 @@ fn push_file_lines(
     output: &mut String,
     files: &[&ClassifiedFile],
     symbol: &str,
-    color: Color,
+    color: UiStyle,
     color_enabled: bool,
     metadata_verb: MetadataVerb,
 ) {
     let path_width = files
         .iter()
-        .map(|file| file.path.to_string().chars().count())
+        .map(|file| measure_text_width(&file.path.to_string()))
         .max()
         .unwrap_or(0);
 
@@ -369,7 +370,7 @@ fn push_file_lines(
         let rendered_metadata = if metadata.is_empty() {
             String::new()
         } else {
-            paint(&metadata, Color::Dim, color_enabled)
+            paint(&metadata, UiStyle::Dim, color_enabled)
         };
         let _ = writeln!(
             output,
@@ -422,7 +423,7 @@ fn relative_unit(value: i64, singular: &str, plural_form: &str) -> String {
 }
 
 fn push_next_steps(output: &mut String, color_enabled: bool) {
-    let _ = writeln!(output, "{}", paint("Next:", Color::Bold, color_enabled));
+    let _ = writeln!(output, "{}", paint("Next:", UiStyle::Bold, color_enabled));
     output.push_str("  git vet diff <path>\n");
     output.push_str("  git vet mark <path>\n");
 }
@@ -441,12 +442,12 @@ const fn need_verb(count: usize) -> &'static str {
     }
 }
 
-fn paint(text: &str, color: Color, enabled: bool) -> String {
-    if enabled {
-        format!("\u{1b}[{}m{text}\u{1b}[0m", color.ansi_code())
-    } else {
-        text.to_owned()
-    }
+fn paint(text: &str, style: UiStyle, enabled: bool) -> String {
+    style
+        .console_style()
+        .force_styling(enabled)
+        .apply_to(text)
+        .to_string()
 }
 
 #[cfg(test)]

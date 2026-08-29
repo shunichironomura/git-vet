@@ -1,12 +1,14 @@
 use std::env;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::time::Duration;
 
+use console::Style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::channel::{NotesRef, ReviewChannel};
 use crate::error::AppError;
 use crate::remote::RemoteName;
+use crate::ui::interactive_stderr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SyncStep {
@@ -97,8 +99,8 @@ pub(crate) enum SyncProgressReporter {
 
 impl SyncProgressReporter {
     pub(crate) fn from_environment() -> Self {
-        if should_use_spinner() {
-            Self::Spinner(SpinnerSyncProgress::new())
+        if interactive_stderr() {
+            Self::Spinner(SpinnerSyncProgress::new(env::var_os("NO_COLOR").is_none()))
         } else {
             Self::Plain(PlainSyncProgress::new())
         }
@@ -142,26 +144,16 @@ impl SyncProgress for SyncProgressReporter {
     }
 }
 
-fn should_use_spinner() -> bool {
-    io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none() && env::var_os("CI").is_none()
-}
-
 pub(crate) struct SpinnerSyncProgress {
     spinner: ProgressBar,
     color: bool,
 }
 
 impl SpinnerSyncProgress {
-    fn new() -> Self {
-        let spinner = ProgressBar::new_spinner().with_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
-        );
+    fn new(color: bool) -> Self {
+        let spinner = ProgressBar::new_spinner().with_style(ProgressStyle::default_spinner());
         spinner.enable_steady_tick(Duration::from_millis(80));
-        Self {
-            spinner,
-            color: true,
-        }
+        Self { spinner, color }
     }
 }
 
@@ -176,7 +168,7 @@ impl SyncProgress for SpinnerSyncProgress {
 
     fn step_started(&mut self, step: SyncStep) -> Result<(), AppError> {
         self.spinner
-            .set_message(paint(step.message(), Color::Yellow, self.color));
+            .set_message(paint(step.message(), UiStyle::Yellow, self.color));
         Ok(())
     }
 
@@ -187,7 +179,7 @@ impl SyncProgress for SpinnerSyncProgress {
     fn step_failed(&mut self, step: SyncStep) -> Result<(), AppError> {
         self.spinner.finish_with_message(format!(
             "{} Failed while {}",
-            paint("✗", Color::Red, self.color),
+            paint("✗", UiStyle::Red, self.color),
             step.gerund()
         ));
         Ok(())
@@ -237,18 +229,18 @@ impl SyncProgress for PlainSyncProgress {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Color {
+enum UiStyle {
     Green,
     Yellow,
     Red,
 }
 
-impl Color {
-    const fn ansi_code(self) -> &'static str {
+impl UiStyle {
+    const fn console_style(self) -> Style {
         match self {
-            Self::Green => "32",
-            Self::Yellow => "33",
-            Self::Red => "31",
+            Self::Green => Style::new().green(),
+            Self::Yellow => Style::new().yellow(),
+            Self::Red => Style::new().red(),
         }
     }
 }
@@ -257,13 +249,13 @@ fn final_summary(report: &SyncReport, color_enabled: bool) -> String {
     match report.outcome {
         SyncOutcome::NothingToSync => format!(
             "{} No review notes to sync for channel {} via {}",
-            paint("✓", Color::Green, color_enabled),
+            paint("✓", UiStyle::Green, color_enabled),
             report.channel,
             report.remote
         ),
         SyncOutcome::FetchedMergedPushed | SyncOutcome::PushedLocalOnly => format!(
             "{} {} review notes for channel {} via {}",
-            paint("✓", Color::Green, color_enabled),
+            paint("✓", UiStyle::Green, color_enabled),
             report.outcome.summary_verb(),
             report.channel,
             report.remote
@@ -271,12 +263,13 @@ fn final_summary(report: &SyncReport, color_enabled: bool) -> String {
     }
 }
 
-fn paint(text: &str, color: Color, enabled: bool) -> String {
-    if enabled {
-        format!("\u{1b}[{}m{text}\u{1b}[0m", color.ansi_code())
-    } else {
-        text.to_owned()
-    }
+fn paint(text: &str, style: UiStyle, enabled: bool) -> String {
+    style
+        .console_style()
+        .for_stderr()
+        .force_styling(enabled)
+        .apply_to(text)
+        .to_string()
 }
 
 #[cfg(test)]

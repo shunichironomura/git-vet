@@ -69,6 +69,8 @@ pub enum AppError {
     ChannelRemovalRequiresForce,
     #[error("sync remote error: {0}")]
     Remote(#[from] RemoteError),
+    #[error("terminal interaction failed: {0}")]
+    Dialog(#[from] dialoguer::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
