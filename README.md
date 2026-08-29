@@ -82,6 +82,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 - `git vet channel list [--json]` — list local review-note channels.
 - `git vet channel copy <SOURCE> <DESTINATION>` — copy all local review notes into a new channel.
 - `git vet channel move <SOURCE> <DESTINATION>` — move all local review notes into a new channel.
+- `git vet channel remove <CHANNEL> [--force]` — remove a local review-note channel.
 - `git vet prune` — prune stale Git-note entries.
 
 Commands that operate on one review channel accept `--channel <name>` to use an independent vetting channel instead of the configured default:
@@ -124,6 +125,18 @@ git vet --channel user-name sync
 ```
 
 Moving a local channel does not delete an existing remote source ref.
+
+Remove a local channel with confirmation:
+
+```sh
+git vet channel remove security
+```
+
+Use `--force` for non-interactive removal. This deletes only the local notes ref; it does not modify remote refs or `vet.channel`:
+
+```sh
+git vet channel remove security --force
+```
 
 ## Ignoring files
 

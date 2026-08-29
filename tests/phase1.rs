@@ -1007,6 +1007,67 @@ fn channel_list_shows_local_channels_in_stable_human_and_json_forms() {
 }
 
 #[test]
+fn channel_remove_deletes_only_the_selected_local_channel() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+    assert!(
+        repo.run_vet(&["channel", "copy", "default", "release"])
+            .status
+            .success()
+    );
+
+    let removed = repo.run_vet(&["channel", "remove", "release", "--force"]);
+    assert!(
+        removed.status.success(),
+        "remove failed: {}",
+        stderr(&removed)
+    );
+    assert_eq!(stdout(&removed), "removed review channel \"release\"\n");
+    assert!(!ref_exists(repo.path(), "refs/notes/vet/release"));
+    assert!(ref_exists(repo.path(), "refs/notes/vet/default"));
+    assert_eq!(record_for(&status_json(&repo), "a.txt")["state"], "vetted");
+
+    let missing = repo.run_vet(&["channel", "remove", "release", "--force"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        stderr(&missing).contains("review channel \"release\" does not exist locally"),
+        "{}",
+        stderr(&missing)
+    );
+}
+
+#[test]
+fn channel_remove_requires_force_non_interactively() {
+    let repo = TestRepo::new();
+    repo.write("a.txt", "hello\n");
+    repo.commit_all("initial");
+    assert!(repo.run_vet(&["mark", "a.txt"]).status.success());
+
+    let output = repo.run_vet(&["channel", "remove", "default"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("non-interactive channel removal requires --force"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(ref_exists(repo.path(), "refs/notes/vet/default"));
+}
+
+#[test]
+fn channel_remove_rejects_global_channel_option() {
+    let repo = TestRepo::new();
+    let output = repo.run_vet(&["--channel", "default", "channel", "remove", "default"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("--channel cannot be used with `channel remove`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn channel_copy_creates_an_exact_independent_review_state_snapshot() {
     let repo = TestRepo::new();
     repo.write("a.txt", "first\n");

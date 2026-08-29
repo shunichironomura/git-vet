@@ -51,6 +51,8 @@ pub enum AppError {
     SameChannelTransfer,
     #[error("source channel {channel:?} has no local review notes")]
     MissingSourceChannelNotes { channel: String },
+    #[error("review channel {channel:?} does not exist locally")]
+    MissingChannelNotes { channel: String },
     #[error("destination channel {channel:?} already has local review notes")]
     ExistingDestinationChannelNotes { channel: String },
     #[error("source channel {channel:?} has a symbolic notes ref; expected a direct ref")]
@@ -59,6 +61,12 @@ pub enum AppError {
     ChannelOptionNotAllowed { command: &'static str },
     #[error("--channel cannot be used with `channel list`; listing is not channel-scoped")]
     ChannelOptionNotAllowedForList,
+    #[error("--channel cannot be used with `channel remove`; pass CHANNEL explicitly")]
+    ChannelOptionNotAllowedForRemove,
+    #[error("aborted removing review channel")]
+    ChannelRemovalDeclined,
+    #[error("non-interactive channel removal requires --force")]
+    ChannelRemovalRequiresForce,
     #[error("sync remote error: {0}")]
     Remote(#[from] RemoteError),
     #[error("I/O error: {0}")]

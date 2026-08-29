@@ -8,7 +8,8 @@ use crate::channel::{
 };
 use crate::commands::{
     DiffTarget, DirtyPathHandling, Gate, MarkOptions, StatusMode, StatusTarget, diff_path,
-    list_channels, mark_paths, status, sync_notes, transfer_channel_notes, unmark_paths,
+    list_channels, mark_paths, remove_channel, status, sync_notes, transfer_channel_notes,
+    unmark_paths,
 };
 use crate::error::AppError;
 use crate::git::Git;
@@ -109,6 +110,15 @@ enum ChannelCommand {
         /// New channel that receives the moved review notes.
         #[arg(value_name = "DESTINATION")]
         destination: String,
+    },
+    /// Remove a local review-note channel.
+    Remove {
+        /// Channel whose local review notes are removed.
+        #[arg(value_name = "CHANNEL")]
+        target: String,
+        /// Skip confirmation.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -222,6 +232,16 @@ fn run_channel_command(
             source,
             destination,
         ),
+        ChannelCommand::Remove { target, force } => {
+            if explicit_channel.is_some() {
+                return Err(AppError::ChannelOptionNotAllowedForRemove);
+            }
+
+            let channel = review_channel_from_input(&target, ReviewChannelSource::RemoveTarget)?;
+            let channels = GitNotesChannelStore::new(git);
+            remove_channel(&channels, &channel, force)?;
+            return Ok(ExitCode::SUCCESS);
+        }
     };
 
     if explicit_channel.is_some() {
@@ -274,6 +294,7 @@ enum ReviewChannelSource {
     BuiltInDefault,
     TransferSource,
     TransferDestination,
+    RemoveTarget,
 }
 
 fn review_channel_from_input(
@@ -301,6 +322,7 @@ fn details_from_source(details: String, source: ReviewChannelSource) -> String {
         ReviewChannelSource::TransferDestination => {
             format!("from DESTINATION argument: {details}")
         }
+        ReviewChannelSource::RemoveTarget => format!("from CHANNEL argument: {details}"),
         ReviewChannelSource::Cli | ReviewChannelSource::BuiltInDefault => details,
     }
 }
