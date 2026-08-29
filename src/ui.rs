@@ -1,5 +1,4 @@
 use std::env;
-use std::ffi::OsStr;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
@@ -20,40 +19,6 @@ impl ColorMode {
             Self::Always
         } else {
             Self::Auto
-        }
-    }
-
-    pub(crate) fn from_process_args() -> Option<Self> {
-        let mut args = env::args_os().skip(1);
-        let mut explicit = None;
-
-        while let Some(argument) = args.next() {
-            if argument == OsStr::new("--") {
-                break;
-            }
-            match argument
-                .to_str()
-                .and_then(|value| value.strip_prefix("--color="))
-            {
-                Some(value) => explicit = Self::from_argument(value),
-                None if argument == OsStr::new("--color") => {
-                    explicit = args
-                        .next()
-                        .and_then(|value| Self::from_argument(&value.to_string_lossy()));
-                }
-                None => {}
-            }
-        }
-
-        explicit
-    }
-
-    fn from_argument(value: &str) -> Option<Self> {
-        match value {
-            "auto" => Some(Self::Auto),
-            "always" => Some(Self::Always),
-            "never" => Some(Self::Never),
-            _ => None,
         }
     }
 }

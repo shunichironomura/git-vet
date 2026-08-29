@@ -173,12 +173,12 @@ impl CliError {
 }
 
 pub fn run_cli() -> Result<ExitCode, CliError> {
-    let bootstrap_color = ColorPolicy::resolve(ColorMode::from_process_args());
+    let environment_color = ColorPolicy::resolve(None);
     let Cli {
         channel,
         color,
         command,
-    } = parse_cli(bootstrap_color);
+    } = parse_cli(environment_color);
     let color = ColorPolicy::resolve(color.map(Into::into));
     let git = Git::discover().map_err(|error| CliError {
         error,
