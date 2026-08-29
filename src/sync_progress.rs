@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::time::Duration;
 
 use console::Style;
@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::channel::{NotesRef, ReviewChannel};
 use crate::error::AppError;
 use crate::remote::RemoteName;
+use crate::ui::interactive_stderr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SyncStep {
@@ -98,8 +99,8 @@ pub(crate) enum SyncProgressReporter {
 
 impl SyncProgressReporter {
     pub(crate) fn from_environment() -> Self {
-        if should_use_spinner() {
-            Self::Spinner(SpinnerSyncProgress::new())
+        if interactive_stderr() {
+            Self::Spinner(SpinnerSyncProgress::new(env::var_os("NO_COLOR").is_none()))
         } else {
             Self::Plain(PlainSyncProgress::new())
         }
@@ -143,26 +144,19 @@ impl SyncProgress for SyncProgressReporter {
     }
 }
 
-fn should_use_spinner() -> bool {
-    io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none() && env::var_os("CI").is_none()
-}
-
 pub(crate) struct SpinnerSyncProgress {
     spinner: ProgressBar,
     color: bool,
 }
 
 impl SpinnerSyncProgress {
-    fn new() -> Self {
+    fn new(color: bool) -> Self {
         let spinner = ProgressBar::new_spinner().with_style(
             ProgressStyle::default_spinner()
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "]),
         );
         spinner.enable_steady_tick(Duration::from_millis(80));
-        Self {
-            spinner,
-            color: true,
-        }
+        Self { spinner, color }
     }
 }
 

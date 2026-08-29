@@ -17,6 +17,7 @@ use crate::remote::RemoteName;
 use crate::review::{ClassifiedFile, ReviewRecord, ReviewState, ReviewedSet, append_record};
 use crate::status_output::{HumanStatusOptions, check_status, human_status, json_status};
 use crate::sync_progress::{SyncContext, SyncOutcome, SyncProgress, SyncReport, SyncStep};
+use crate::ui::Activity;
 use crate::vetignore::Vetignore;
 
 #[derive(Clone, Copy, Debug)]
@@ -237,6 +238,7 @@ pub(crate) fn status(
     mode: StatusMode,
     pathspecs: &[PathBuf],
 ) -> Result<Gate, AppError> {
+    let activity = Activity::start(format!("Scanning review state for channel {channel}"));
     let vetignore = Vetignore::load(&git.root, channel)?;
     let tracked = git.tracked_files_at_head()?;
     let tracked = status_scope_files(git, &tracked, pathspecs)?
@@ -247,6 +249,7 @@ pub(crate) fn status(
 
     let mut classified = classify_status_files(git, &tracked, &reviewed, mode.target)?;
     classified.sort_by(|left, right| left.path.cmp(&right.path));
+    drop(activity);
 
     if mode.check {
         let gate = if classified
