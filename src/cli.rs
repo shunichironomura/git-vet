@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::builder::styling::{AnsiColor, Effects, Styles};
@@ -14,6 +15,7 @@ use crate::commands::{
 };
 use crate::error::AppError;
 use crate::git::Git;
+use crate::manpage;
 use crate::notes::{GitNotesChannelStore, GitNotesStore, NotesStore};
 use crate::sync_progress::SyncProgressReporter;
 use crate::ui::{ColorMode, ColorPolicy};
@@ -65,6 +67,15 @@ impl From<CliColorMode> for ColorMode {
 
 #[derive(Subcommand, Debug)]
 enum CommandKind {
+    /// Install the git-vet(1) manual page for the current user.
+    InstallMan {
+        // Override the inherited global argument so it stays out of this command's help.
+        #[arg(long, hide = true)]
+        channel: Option<String>,
+        /// Install into this man1 directory instead of the user default.
+        #[arg(long, value_name = "DIRECTORY")]
+        man_dir: Option<PathBuf>,
+    },
     /// Manage local review notes across channels.
     Channel {
         #[command(subcommand)]
@@ -180,6 +191,22 @@ pub fn run_cli() -> Result<ExitCode, CliError> {
         command,
     } = parse_cli(environment_color);
     let color = ColorPolicy::resolve(color.map(Into::into));
+
+    if let CommandKind::InstallMan {
+        channel: command_channel,
+        man_dir,
+    } = &command
+    {
+        return install_man_page(
+            channel.as_deref().or(command_channel.as_deref()),
+            man_dir.as_deref(),
+        )
+        .map_err(|error| CliError {
+            error,
+            color_error: color.stderr(),
+        });
+    }
+
     let git = Git::discover().map_err(|error| CliError {
         error,
         color_error: color.stderr(),
@@ -207,6 +234,10 @@ fn run_cli_inner(
     color: ColorPolicy,
 ) -> Result<ExitCode, AppError> {
     match command {
+        CommandKind::InstallMan {
+            channel: command_channel,
+            man_dir,
+        } => install_man_page(channel.or(command_channel.as_deref()), man_dir.as_deref()),
         CommandKind::Channel { command } => run_channel_command(git, channel, command),
         CommandKind::Mark { paths, allow_dirty } => {
             with_selected_channel(git, channel, |_, notes| {
@@ -272,6 +303,25 @@ fn run_cli_inner(
             Ok(ExitCode::SUCCESS)
         }),
     }
+}
+
+fn install_man_page(
+    explicit_channel: Option<&str>,
+    man_dir: Option<&Path>,
+) -> Result<ExitCode, AppError> {
+    if explicit_channel.is_some() {
+        return Err(AppError::ChannelOptionNotAllowedForInstallMan);
+    }
+
+    let destination = manpage::install(man_dir).map_err(|error| AppError::ManPageInstall {
+        details: error.to_string(),
+    })?;
+    writeln!(
+        io::stdout().lock(),
+        "Installed git-vet(1) at {}",
+        destination.display()
+    )?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_channel_command(

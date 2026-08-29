@@ -63,6 +63,12 @@ pub enum AppError {
     ChannelOptionNotAllowedForList,
     #[error("--channel cannot be used with `channel remove`; pass CHANNEL explicitly")]
     ChannelOptionNotAllowedForRemove,
+    #[error(
+        "--channel cannot be used with `install-man`; manual installation is not channel-scoped"
+    )]
+    ChannelOptionNotAllowedForInstallMan,
+    #[error("failed to install manual: {details}")]
+    ManPageInstall { details: String },
     #[error("aborted removing review channel")]
     ChannelRemovalDeclined,
     #[error("non-interactive channel removal requires --force")]

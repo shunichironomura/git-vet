@@ -266,6 +266,56 @@ fn record_for<'a>(records: &'a [Value], path: &str) -> &'a Value {
 }
 
 #[test]
+fn install_man_works_outside_a_git_repository() {
+    let temp = require(TestTempDir::new("git-vet-man-test"), "create temp dir");
+    let man_dir = temp.path().join("share/man/man1");
+    let output = TestRepo::run_vet_in(
+        temp.path(),
+        &["install-man", "--man-dir", path_str(&man_dir)],
+    );
+
+    assert!(
+        output.status.success(),
+        "install-man failed: {}",
+        stderr(&output)
+    );
+    let installed = man_dir.join("git-vet.1");
+    assert_eq!(
+        require(fs::read_to_string(&installed), "read installed man page"),
+        include_str!("../man/git-vet.1")
+    );
+    assert!(stdout(&output).contains(&installed.display().to_string()));
+    assert_eq!(stderr(&output), "");
+}
+
+#[test]
+fn install_man_help_omits_the_inapplicable_channel_option() {
+    let temp = require(TestTempDir::new("git-vet-man-test"), "create temp dir");
+    let output = TestRepo::run_vet_in(temp.path(), &["install-man", "--help"]);
+
+    assert!(output.status.success(), "help failed: {}", stderr(&output));
+    assert!(!stdout(&output).contains("--channel"));
+}
+
+#[test]
+fn install_man_rejects_channel_selection() {
+    let temp = require(TestTempDir::new("git-vet-man-test"), "create temp dir");
+    let output = TestRepo::run_vet_in(
+        temp.path(),
+        &[
+            "--channel",
+            "security",
+            "install-man",
+            "--man-dir",
+            path_str(temp.path()),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("--channel cannot be used with `install-man`"));
+}
+
+#[test]
 fn empty_notes_ref_means_tracked_files_are_new() {
     let repo = TestRepo::new();
     repo.write("a.txt", "hello\n");
