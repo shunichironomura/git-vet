@@ -10,6 +10,7 @@ mod commands;
 mod error;
 mod git;
 mod git_types;
+mod manpage;
 mod notes;
 mod path;
 mod remote;

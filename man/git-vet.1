@@ -1,0 +1,167 @@
+.TH GIT-VET 1
+.SH NAME
+git-vet \- track review state for Git-tracked file contents
+.SH SYNOPSIS
+.B git vet
+[\fB\-\-channel\fR \fICHANNEL\fR]
+[\fB\-\-color\fR \fIWHEN\fR]
+.I COMMAND
+[\fIOPTIONS\fR]
+.br
+.B git-vet
+[\fB\-\-channel\fR \fICHANNEL\fR]
+[\fB\-\-color\fR \fIWHEN\fR]
+.I COMMAND
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B git-vet
+records that the exact contents of a tracked file have been reviewed.
+Review state is keyed by Git blob object ID, so changing a file creates content
+that must be reviewed again.
+.PP
+State is stored per review channel in
+.BR refs/notes/vet/<channel> .
+The selected channel comes from
+.BR \-\-channel ,
+then
+.BR vet.channel ,
+and otherwise defaults to
+.BR default .
+.SH GLOBAL OPTIONS
+.TP
+.BI \-\-channel " CHANNEL"
+Use the named review channel. Channel names are flat and cannot contain a slash.
+.TP
+.BI \-\-color " WHEN"
+Control colored output. Values are
+.BR auto ,
+.BR always ,
+and
+.BR never .
+.TP
+.BR \-h , " \-\-help"
+Print command-line help. When invoked through Git, use
+.B git vet \-h
+for concise command-line help; Git reserves
+.B git vet \-\-help
+for this manual page.
+.TP
+.BR \-V , " \-\-version"
+Print the version.
+.SH COMMANDS
+.TP
+.B install-man
+[\fB\-\-man-dir\fR \fIDIRECTORY\fR]
+Install this manual as
+.B git-vet.1
+in a user man-page directory. The default is
+.I $XDG_DATA_HOME/man/man1
+when
+.B XDG_DATA_HOME
+is set, otherwise
+.IR $HOME/.local/share/man/man1 .
+This command does not require a Git repository.
+.TP
+.B channel list
+[\fB\-\-json\fR]
+List local review-note channels.
+.TP
+.B channel copy
+.I SOURCE DESTINATION
+Copy all local review notes from an existing channel into a new channel.
+.TP
+.B channel move
+.I SOURCE DESTINATION
+Move all local review notes from an existing channel to a new channel.
+.TP
+.B channel remove
+.I CHANNEL
+[\fB\-\-force\fR]
+Delete a local review-note channel. Non-interactive use requires
+.BR \-\-force .
+.TP
+.B mark
+[\fB\-\-allow-dirty\fR]
+.I PATH...
+Mark each path's current committed HEAD content as reviewed. Dirty target paths
+require confirmation unless
+.B \-\-allow-dirty
+is supplied; only committed content is marked in either case.
+.TP
+.B unmark
+.I PATH...
+Remove review state from each path's current committed HEAD content. Paths with
+identical contents share blob-keyed state.
+.TP
+.B status
+[\fB\-\-workspace\fR]
+[\fB\-\-json\fR]
+[\fB\-\-all\fR]
+[\fB\-\-check\fR]
+[\fIPATHSPEC...\fR]
+Classify selected tracked files as
+.BR vetted ,
+.BR stale ,
+or
+.BR new .
+With
+.BR \-\-workspace ,
+classify working-tree contents instead of HEAD. With
+.BR \-\-check ,
+exit 1 if any selected file is not reviewed.
+.TP
+.B diff
+[\fB\-\-workspace\fR]
+.I PATH
+Show the change that remains to be reviewed, from the latest reviewed version
+(or an empty file) to HEAD. With
+.BR \-\-workspace ,
+use working-tree content as the target.
+.TP
+.B sync
+[\fB\-\-remote\fR \fIREMOTE\fR]
+Fetch, merge, and push the selected channel's notes. Remote selection uses the
+explicit option, then
+.BR vet.syncRemote ,
+then
+.BR origin .
+.TP
+.B prune
+Prune notes for objects that no longer exist.
+.SH FILES
+.TP
+.B .vetignore
+Gitignore-style patterns excluded in every channel.
+.TP
+.BI .vetignore. CHANNEL
+Additional Gitignore-style patterns for one channel.
+.TP
+.BI refs/notes/vet/ CHANNEL
+Git notes ref containing the channel's blob-keyed review records.
+.SH EXIT STATUS
+.TP
+.B 0
+The command succeeded, or
+.B status --check
+found every selected file reviewed.
+.TP
+.B 1
+.B status --check
+found one or more unreviewed files.
+.TP
+.B 2
+A usage or runtime error occurred.
+.SH EXAMPLES
+.nf
+git vet status
+git vet diff src/lib.rs
+git vet mark src/lib.rs
+git vet status --check
+git vet --channel security status
+git vet sync --remote origin
+git-vet install-man
+.fi
+.SH SEE ALSO
+.BR git (1),
+.BR git-notes (1),
+.BR git-diff (1)

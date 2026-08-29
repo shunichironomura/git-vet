@@ -14,6 +14,14 @@ Run `git vet status` to get a review backlog for the repository. It shows files 
 cargo install git-vet --locked
 ```
 
+Cargo installs binaries but not man pages. Install the embedded manual for the current user separately:
+
+```sh
+git-vet install-man
+```
+
+This writes `git-vet.1` under `${XDG_DATA_HOME:-$HOME/.local/share}/man/man1`. Use `--man-dir <DIRECTORY>` to select another `man1` directory. Once that directory is on `MANPATH`, both `git help vet` and `git vet --help` open the manual. `git vet -h` prints concise command-line help without opening a man-page viewer.
+
 With `git-vet` on `PATH`, you can run it as either:
 
 ```sh
@@ -78,6 +86,7 @@ For `new` files, `git vet diff <path>` shows the whole file as a new-file diff. 
 
 ## Commands
 
+- `git-vet install-man [--man-dir <DIRECTORY>]` — install the embedded `git-vet(1)` manual; no Git repository is required.
 - `git vet status [PATHSPEC...]` — show vetting state for tracked files, optionally limited to files or directory subtrees.
 - `git vet status --json [PATHSPEC...]` — emit stable JSON.
 - `git vet status --workspace [PATHSPEC...]` — classify local working-tree contents instead of committed `HEAD` contents.
