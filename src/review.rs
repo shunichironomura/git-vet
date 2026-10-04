@@ -183,8 +183,9 @@ impl NoteRecord {
 mod tests {
     use super::*;
 
-    fn oid(hex: &str) -> Result<gix::ObjectId, Box<dyn std::error::Error>> {
-        gix::ObjectId::from_hex(hex.as_bytes()).map_err(Into::into)
+    fn oid(hex: &str) -> Result<gix::ObjectId, crate::error::AppError> {
+        gix::ObjectId::from_hex(hex.as_bytes())
+            .map_err(|err| crate::error::git_error("parsing test commit oid", err))
     }
 
     #[test]
