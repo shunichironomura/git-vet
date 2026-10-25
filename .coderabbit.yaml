@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration. Reference: https://docs.coderabbit.ai/reference/configuration
+# CodeRabbit also reads CLAUDE.md / AGENTS.md as coding guidelines.
+language: "en-US"
+
+reviews:
+  # Lockfiles and build output are not worth reviewing and count against the
+  # per-review file limit.
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!target/**"
+
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: >-
+        Enforce the rules in AGENTS.md: functional core, imperative shell
+        (keep subprocess and filesystem IO in adapters); no flat-string
+        encodings of structured data; no string-matched control flow;
+        stringify only at boundaries. Follow the Git integration philosophy:
+        use gix for structured Git data, and the git CLI only for porcelain
+        behavior (diff, notes, log --follow, config) with machine-oriented
+        output parsed in a small adapter. Flag fallbacks or workarounds kept
+        for backward compatibility. Do not repeat issues that clippy or
+        rustfmt already report.
+    - path: "{SPEC.md,man/git-vet.1,README.md}"
+      instructions: >-
+        Check that user-facing behavior described here stays consistent with
+        SPEC.md, the man page, and the CLI implementation in src/cli.rs.
+
+  auto_review:
+    auto_incremental_review: false
+    # Dependency-update PRs would quickly exhaust the review rate limit.
+    ignore_usernames:
+      - "renovate[bot]"
+
+  # Already enforced in CI / pre-commit (cargo clippy, zizmor, rumdl).
+  tools:
+    clippy:
+      enabled: false
+    markdownlint:
+      enabled: false
