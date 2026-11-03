@@ -146,7 +146,7 @@ jobs:
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}" "${{ needs.actions-lock.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
