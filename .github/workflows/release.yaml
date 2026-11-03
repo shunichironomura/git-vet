@@ -12,7 +12,7 @@ jobs:
     outputs:
       version: ${{ steps.get-version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: true
 
@@ -48,14 +48,14 @@ jobs:
       id-token: write # IMPORTANT: mandatory for trusted publishing
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - uses: rust-lang/crates-io-auth-action@v1.0.6
         id: auth
       - run: cargo publish --workspace --locked
         env:
