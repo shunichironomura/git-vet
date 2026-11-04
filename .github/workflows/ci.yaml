@@ -122,6 +122,21 @@ jobs:
 
       - uses: crate-ci/typos@v1.51.1
 
+  prek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: j178/prek-action@v3.1.0
+        with:
+          # Follow the prek version bundled with the action (updated by Renovate).
+          prek-version: latest-known
+          # no-commit-to-branch fails on pushes to main.
+          extra-args: --all-files --skip=no-commit-to-branch
+
   actions-lock:
     name: Verify actions lockfile
     permissions:
@@ -140,13 +155,13 @@ jobs:
         run: gh actions-lock --verify
 
   collect:
-    needs: [checks, test, coverage, msrv, typos, actions-lock]
+    needs: [checks, test, coverage, msrv, typos, prek, actions-lock]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}" "${{ needs.actions-lock.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}" "${{ needs.prek.result }}" "${{ needs.actions-lock.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
