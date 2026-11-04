@@ -1,12 +1,6 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["github>shunichironomura/renovate-config"],
-  // TEMPORARY: run outside the preset's weekly schedule while trialing the shared preset.
-  // Remove after the trial so updates follow the weekly schedule again.
-  schedule: ["at any time"],
-  lockFileMaintenance: {
-    schedule: ["at any time"],
-  },
   packageRules: [
     {
       matchManagers: ["rust-toolchain"],
