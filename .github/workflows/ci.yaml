@@ -81,7 +81,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2.88.0
+        uses: taiki-e/install-action@v2.88.1
         with:
           tool: cargo-llvm-cov
 
@@ -106,7 +106,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.88.0
+      - uses: taiki-e/install-action@v2.88.1
         with:
           tool: cargo-hack
 
